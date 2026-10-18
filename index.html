@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#0b2c90" />
+    <meta name="color-scheme" content="light" />
+    <meta name="robots" content="noindex,nofollow" />
+    <meta
+      name="description"
+      content="Quản lý dự án xây dựng — không gian làm việc, tiến độ CPM, dự toán và tài chính."
+    />
+    <title>Quản lý dự án xây dựng</title>
+    <link rel="icon" href="assets/hcmut-favicon.png" type="image/png" />
+    <link
+      rel="preload"
+      href="vendor/BeVietnamPro-Regular.ttf"
+      as="font"
+      type="font/ttf"
+      crossorigin
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="polish.css" />
+    <link rel="stylesheet" href="theme-hcmut.css" />
+    <link rel="stylesheet" href="cinematic.css" />
+    <link rel="stylesheet" href="planning.css" />
+  </head>
+  <body>
+    <div id="landing">
+      <header class="landing-nav">
+        <a class="brand" href="#"
+          ><img
+            class="school-logo"
+            src="assets/hcmut-logo.png"
+            alt="Trường Đại học Bách khoa – ĐHQG-HCM"
+            width="48"
+            height="48"
+          /><span class="brand-wordmark"
+            >Quản lý dự án<span>xây dựng</span></span
+          ><span class="brand-sub">KHÔNG GIAN QUẢN LÝ CÔNG TRÌNH</span></a
+        >
+        <nav>
+          <button
+            data-action="pause-motion"
+            class="motion-pause"
+            aria-pressed="false"
+          >
+            Dừng chuyển động</button
+          ><a href="#journey">Cách hoạt động</a
+          ><button class="btn light" data-action="scroll-modes">
+            Bắt đầu dự án <span>↗</span>
+          </button>
+        </nav>
+      </header>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">
+            <span class="live-dot"></span> TỪ Ý TƯỞNG ĐẾN CÔNG TRÌNH
+          </p>
+          <h1>Quản lý dự án<br /><span>xây dựng.</span></h1>
+          <p class="hero-description">
+            Tiến độ, khối lượng và dòng tiền.<br />Một không gian để nhìn rõ
+            toàn bộ công trình.
+          </p>
+          <div class="mode-quick">
+            <button class="btn lime" data-mode="personal">
+              Tôi làm cá nhân <span>↗</span></button
+            ><button class="btn outline-light" data-mode="business">
+              Tôi quản lý đội dự án <span>↗</span>
+            </button>
+          </div>
+          <p class="hero-note">
+            Dữ liệu mẫu có sẵn · Không cần đăng ký để khám phá
+          </p>
+        <div class="world-caption">
+            <span>01 — 07 / TRÌNH TỰ THI CÔNG</span
+            ><strong id="hero-stage">Kết cấu phần thân</strong
+            ><input
+              id="hero-slider"
+              type="range"
+              min="0"
+              max="100"
+              value="65"
+              aria-label="Giai đoạn xây dựng minh họa"
+            />
+            <div class="hero-presets">
+              <button
+                data-action="pause-motion"
+                class="motion-pause mobile-motion-control"
+              >
+                Dừng chuyển động
+              </button>
+              <button data-hero-progress="0.355" data-hero-label="Lu/đầm sau khi rải đất · nền rộng">Lu đất đắp</button
+              ><button data-hero-stage="2">Đào hố</button
+              ><button data-hero-progress="0.307" data-hero-label="Đổ bê tông móng · trước khi lấp đất">Đổ móng</button
+              ><button data-hero-stage="4">Đổ sàn</button>
+            </div>
+            <small>Kéo thanh để xem tiến độ · Kéo chuột để xoay</small>
+          </div>
+</div>
+        <div class="hero-world"><div class="camera-tools"><button class="camera-place" data-camera-action="site">Công trình</button><button data-camera-action="in" aria-label="Phóng to công trình">+</button><button data-camera-action="out" aria-label="Thu nhỏ công trình">−</button><button data-camera-action="reset" aria-label="Căn vừa công trình">⤢</button></div><img class="scene-poster" src="assets/scene-preview.webp" alt="" aria-hidden="true" width="900" height="900">
+          <canvas
+            id="hero-canvas"
+            aria-label="Mô hình công trình 3D minh họa có thể xoay bằng chuột"
+          ></canvas>
+          <div class="world-tag">
+            <span class="live-dot"></span> CÔNG TRÌNH
+          </div>
+
+        </div>
+        <div class="hero-bottom">
+          <span>CPM & ĐƯỜNG GĂNG</span><span>DỰ TOÁN & NGÂN SÁCH</span
+          ><span>DÒNG TIỀN & LÃI VAY</span
+          ><a href="#journey">CUỘN ĐỂ KHÁM PHÁ ↓</a>
+        </div>
+      </section>
+      <section id="journey" class="journey">
+        <div class="section-intro reveal">
+          <p class="eyebrow">MỘT CÔNG TRÌNH. MỘT MẠCH DỮ LIỆU.</p>
+          <h2>Thấy điều sắp tới.<br />Chủ động điều đang làm.</h2>
+          <p>
+            Thay một thời lượng, xem ngay đường găng. Đổi một khối lượng, biết
+            ngay chi phí. Tiến độ và chi phí cùng nằm trong một dự án.
+          </p>
+        </div>
+        <div class="feature-grid">
+          <article class="feature reveal">
+            <span class="feature-no">01 / KẾ HOẠCH</span>
+            <div class="mini-gantt">
+              <i style="--x: 0; --w: 30%"></i><i style="--x: 24%; --w: 40%"></i
+              ><i style="--x: 55%; --w: 37%"></i>
+            </div>
+            <h3>Liên kết đúng. Đi đúng nhịp.</h3>
+            <p>
+              FS, SS, FF, SF, độ trễ và dự trữ. Đường găng tự cập nhật theo công
+              việc của bạn.
+            </p>
+          </article>
+          <article class="feature reveal">
+            <span class="feature-no">02 / CHI PHÍ</span>
+            <div class="mini-cost">
+              <div>
+                <span>Khối lượng × đơn giá</span
+                ><b aria-label="Tổng chi phí">Tổng</b>
+              </div>
+              <div><span>Ngân sách · thực tế</span><b>↗</b></div>
+            </div>
+            <h3>Biết từng đồng đi đâu.</h3>
+            <p>
+              Dự toán vật liệu, nhân công, máy. Phân tích EVM và phương án rút
+              ngắn tiến độ.
+            </p>
+          </article>
+          <article class="feature reveal">
+            <span class="feature-no">03 / TÀI CHÍNH</span
+            ><svg viewBox="0 0 240 85" class="mini-chart">
+              <path
+                d="M0 70 C50 70 30 50 80 50 S130 60 160 25 S210 30 240 5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="3"
+              />
+              <path d="M0 80H240" stroke="currentColor" opacity=".2" />
+            </svg>
+            <h3>Nhìn xa hơn tổng mức đầu tư.</h3>
+            <p>
+              Lịch trả nợ, lãi vay, giá trị hiện tại, NPV và IRR với giả định
+              bạn tự kiểm soát.
+            </p>
+          </article>
+        </div>
+      </section>
+      <section id="modes" class="choose-section">
+        <div class="section-intro reveal">
+          <p class="eyebrow">CHỌN KHÔNG GIAN CỦA BẠN</p>
+          <h2>Cùng nền tảng.<br />Đúng cách bạn làm việc.</h2>
+        </div>
+        <div class="mode-cards">
+          <button class="mode-card reveal" data-mode="personal">
+            <span class="mode-icon">↗</span>
+            <p class="eyebrow">CÁ NHÂN</p>
+            <h3>Tập trung vào<br />công trình của bạn.</h3>
+            <p>
+              Kỹ sư, sinh viên, chủ nhà. Mở dự án, thử phương án và hiểu rõ các
+              con số.
+            </p>
+            <span class="mode-link"
+              >Vào không gian cá nhân <b>↗</b></span
+            ></button
+          ><button class="mode-card business-card reveal" data-mode="business">
+            <span class="mode-icon">⌘</span>
+            <p class="eyebrow">DOANH NGHIỆP / ĐỘI DỰ ÁN</p>
+            <h3>Một góc nhìn.<br />Nhiều công trình.</h3>
+            <p>
+              Danh mục dự án, phân công, ngân sách và nguồn lực. Cả đội làm việc
+              trên cùng nền dữ liệu.
+            </p>
+            <span class="mode-link">Vào không gian đội dự án <b>↗</b></span>
+          </button>
+        </div>
+      </section>
+      <footer class="landing-footer">
+        <a class="brand" href="#"
+          ><img
+            class="school-logo"
+            src="assets/hcmut-logo.png"
+            alt="Trường Đại học Bách khoa – ĐHQG-HCM"
+            width="48"
+            height="48"
+          /><span class="brand-wordmark"
+            >Quản lý dự án<span>xây dựng</span></span
+          ></a
+        >
+        <p>Đặt nền cho những công trình tốt hơn.</p>
+        <span>Bản chạy thử · 2026</span>
+      </footer>
+    </div>
+    <div id="app" hidden>
+      <aside class="sidebar">
+        <button class="brand" data-action="home">
+          <img
+            class="school-logo"
+            src="assets/hcmut-logo.png"
+            alt="Trường Đại học Bách khoa – ĐHQG-HCM"
+            width="48"
+            height="48"
+          /><span class="brand-wordmark"
+            >Quản lý dự án<span>xây dựng</span></span
+          ><span class="beta">BETA</span></button
+        ><button
+          id="mode-switch"
+          aria-label="Chọn không gian làm việc"
+          class="mode-switch"
+          data-action="home"
+        ></button>
+        <div class="side-label">KHÔNG GIAN LÀM VIỆC</div>
+        <nav id="side-nav"></nav>
+        <div class="sidebar-bottom">
+          <button data-page="guide">
+            ⓘ <span>Hướng dẫn & cơ sở tính</span>
+          </button>
+          <div class="save-status">
+            <span class="live-dot"></span
+            ><span id="save-state">Lưu trên trình duyệt</span>
+          </div>
+          <button data-action="team-connect" class="server-link">
+            ⌘ Kết nối không gian chung
+          </button>
+        </div>
+      </aside>
+      <div class="app-content">
+        <header class="app-topbar">
+          <div class="breadcrumb">
+            <button id="mobile-menu" class="icon-btn" aria-label="Mở menu">
+              ☰</button
+            ><span id="workspace-label"></span><span class="divider">/</span
+            ><select id="project-select" aria-label="Chọn dự án"></select>
+          </div>
+          <div class="topbar-actions"><button class="btn ghost small top-export" data-action="copy-current">Sao chép trang</button><button class="btn ghost small top-export" data-action="export-current">Xuất trang</button>
+            <span id="access-badge" class="badge neutral">Cục bộ</span
+            ><button
+              class="icon-btn"
+              data-action="settings"
+              aria-label="Cài đặt dự án"
+              title="Cài đặt dự án"
+            >
+              ⚙</button
+            ><button
+              class="avatar"
+              data-action="team-connect"
+              aria-label="Tài khoản và không gian chung"
+            >
+              KT
+            </button>
+          </div>
+        </header>
+        <main id="main"></main>
+        <footer class="app-footer">
+          <span>Quản lý dự án xây dựng · Tiến độ và chi phí trong tầm tay.</span
+          ><span id="footer-calendar"></span>
+        </footer>
+      </div>
+    </div>
+    <dialog id="modal">
+      <form id="modal-form">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow" id="modal-kicker">DỰ ÁN</p>
+            <h2 id="modal-title"></h2>
+          </div>
+          <button
+            type="button"
+            class="icon-btn"
+            data-action="close-modal"
+            aria-label="Đóng"
+          >
+            ✕
+          </button>
+        </div>
+        <div id="modal-body"></div>
+        <div id="modal-error" class="form-error" role="alert" hidden></div>
+        <div class="modal-footer">
+          <button type="button" class="btn ghost" data-action="close-modal">
+            Hủy</button
+          ><button id="modal-submit" class="btn primary" type="submit">
+            Lưu thay đổi ↗
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <input
+      id="import-file"
+      type="file"
+      accept=".json,application/json"
+      hidden
+    />
+    <div id="toast" role="status" aria-live="polite"></div>
+    <noscript
+      ><div style="padding: 25px; background: #e8efd9; color: #203426">
+        Các công cụ tính dự án cần JavaScript. Bật JavaScript rồi tải lại để
+        chọn không gian cá nhân hoặc đội dự án.
+      </div></noscript
+    >
+    <script src="vendor/purify.min.js"></script>
+    <script src="vendor/motion.js"></script>
+    <script src="vendor/phy-touch.js"></script>
+    <script src="engine.js"></script>
+    <script src="planner.js"></script>
+    <script src="networks.js"></script>
+    <script src="graph-board.js"></script>
+    <script src="print-export.js"></script>
+    <script src="samples.js"></script>
+    <script src="construction-sequence.js"></script>
+    <script src="equipment.js"></script>
+    <script src="fleet.js"></script>
+    <script src="reinforcement.js"></script>
+    <script src="scene.js"></script>
+    <script src="boot.js"></script>
+  </body>
+</html>

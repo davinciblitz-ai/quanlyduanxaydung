@@ -1,0 +1,28 @@
+{
+  "name": "quan-ly-du-an-xay-dung",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vietnamese construction scheduling, estimating and project finance workspace",
+  "scripts": {
+    "start": "node server.cjs",
+    "test": "node tests/engine.test.cjs && node tests/planner.test.cjs && node tests/networks.test.cjs && node tests/graph-board.test.cjs && node tests/fleet.test.cjs && node tests/server.test.cjs && node tests/collaboration.test.cjs",
+    "test:browser": "node tests/browser.test.cjs"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "@designcodeio/threeui": "^1.2.0",
+    "@wellyshen/use-web-animations": "^0.9.1",
+    "dompurify": "^3.4.17",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
+    "jszip": "^3.10.2",
+    "motion": "^14.3.0",
+    "phy-touch": "^0.2.2",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.64.1"
+  }
+}

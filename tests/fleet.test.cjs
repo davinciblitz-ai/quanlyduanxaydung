@@ -1,0 +1,12 @@
+const assert=require('node:assert/strict'),F=require('../fleet.js');
+const path=F.route([[-30,2.55],[4,2.55],[4,-2.55],[-.1,-2.55]]),state={};let pose=F.advance(state,path,false,.1);assert.equal(pose.visible,false);
+let previous=pose;for(let i=0;i<2000;i++){const next=F.advance(state,path,true,1/60);assert.ok(Math.hypot(next.x-previous.x,next.z-previous.z)<=2.6/60+1e-8);previous=next;}assert.equal(previous.parked,true);
+const before=state.distance;F.advance(state,path,false,1,{paused:true});assert.equal(state.distance,before);
+for(let i=0;i<2000;i++){const next=F.advance(state,path,false,1/60);assert.ok(Math.hypot(next.x-previous.x,next.z-previous.z)<=2.6/60+1e-8);previous=next;}assert.equal(previous.visible,false);assert.equal(previous.x,-30);
+F.advance(state,path,true,.01);const mid=state.distance;F.advance(state,path,false,.001);assert.ok(Math.abs(state.distance-mid)<=.002601);assert.equal(F.advance(state,path,true,0,{reduced:true}).parked,true);
+console.log('✓ Xe vào, ra, đổi hướng và tạm dừng giữ liên tục vị trí; chỉ ẩn tại đầu đường ngoài công trường.');
+const registry=new Map(),size={length:2.15,width:.84};assert.ok(F.reserve(registry,'lead',{x:0,z:2.48,yaw:0,visible:true},size));assert.equal(F.reserve(registry,'follower',{x:-1,z:2.48,yaw:0,visible:true},size),false);assert.ok(F.reserve(registry,'opposite',{x:0,z:3.52,yaw:Math.PI,visible:true},size));assert.equal(F.reserve(registry,'crossing',{x:0,z:3,yaw:Math.PI/2,visible:true},size),false);assert.equal(F.overlaps({x:0,z:0,yaw:.6,length:2,width:1},{x:.1,z:.1,yaw:-.3,length:2,width:1}),true);
+const paths={in:F.route([[-30,2.48],[4,2.48],[4,0]]),out:F.route([[4,0],[4,3.52],[-30,3.52]])},plant={};let prev;for(let i=0;i<600;i++){const q=F.deploy(plant,paths,true,.05);if(prev)assert.ok(Math.hypot(q.x-prev.x,q.z-prev.z)<=.106);prev=q;}assert.equal(plant.phase,'work');let exited=false;for(let i=0;i<600;i++){const q=F.deploy(plant,paths,false,.05);if(q.phase==='exit'&&q.x<3.5){assert.equal(q.z,3.52);exited=true;}if(prev.visible&&q.visible)assert.ok(Math.hypot(q.x-prev.x,q.z-prev.z)<=.106);prev=q;}assert.ok(exited);assert.equal(plant.phase,'idle');
+const blocked={};F.deploy(blocked,paths,true,.05,{accept:()=>false});assert.equal(blocked.distance,0);assert.equal(blocked.phase,'idle');
+console.log('✓ Giữ khoảng cách theo hình chữ nhật xoay, nhường đường khi giao cắt, vào/ra hai làn riêng và dừng an toàn khi bị chặn.');
+assert.ok(Math.abs(F.turnAngle(Math.PI-.01,-Math.PI+.01,.1)-(Math.PI+.01))<1e-10);assert.ok(Math.abs(F.turnAngle(0,Math.PI,.05))<=.120001);

@@ -1,0 +1,202 @@
+{
+  "schema": 1,
+  "project": {
+    "id": "nhom-quan-ly-du-an",
+    "name": "nhóm quản lý dự án",
+    "currency": "USD",
+    "start": "2026-10-19",
+    "workdays": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "statusDay": 0,
+    "capacity": 0,
+    "indirectBase": 400,
+    "dailySaving": 50,
+    "tasks": [
+      {
+        "id": "A",
+        "name": "A",
+        "duration": 3,
+        "deps": [],
+        "cost": 50,
+        "workers": 0,
+        "progress": 0,
+        "minDuration": 2,
+        "crashSlope": 20,
+        "owner": "",
+        "actualCost": 0,
+        "group": "Thi công",
+        "stage": -1
+      },
+      {
+        "id": "B",
+        "name": "B",
+        "duration": 6,
+        "deps": [
+          {
+            "id": "A",
+            "type": "FS",
+            "lag": 0
+          }
+        ],
+        "cost": 80,
+        "workers": 0,
+        "progress": 0,
+        "minDuration": 4,
+        "crashSlope": 40,
+        "owner": "",
+        "actualCost": 0,
+        "group": "Thi công",
+        "stage": -1
+      },
+      {
+        "id": "C",
+        "name": "C",
+        "duration": 10,
+        "deps": [
+          {
+            "id": "A",
+            "type": "FS",
+            "lag": 0
+          }
+        ],
+        "cost": 60,
+        "workers": 0,
+        "progress": 0,
+        "minDuration": 9,
+        "crashSlope": 30,
+        "owner": "",
+        "actualCost": 0,
+        "group": "Thi công",
+        "stage": -1
+      },
+      {
+        "id": "D",
+        "name": "D",
+        "duration": 11,
+        "deps": [
+          {
+            "id": "A",
+            "type": "FS",
+            "lag": 0
+          }
+        ],
+        "cost": 50,
+        "workers": 0,
+        "progress": 0,
+        "minDuration": 7,
+        "crashSlope": 25,
+        "owner": "",
+        "actualCost": 0,
+        "group": "Thi công",
+        "stage": -1
+      },
+      {
+        "id": "E",
+        "name": "E",
+        "duration": 8,
+        "deps": [
+          {
+            "id": "B",
+            "type": "FS",
+            "lag": 0
+          }
+        ],
+        "cost": 100,
+        "workers": 0,
+        "progress": 0,
+        "minDuration": 6,
+        "crashSlope": 30,
+        "owner": "",
+        "actualCost": 0,
+        "group": "Thi công",
+        "stage": -1
+      },
+      {
+        "id": "F",
+        "name": "F",
+        "duration": 5,
+        "deps": [
+          {
+            "id": "C",
+            "type": "FS",
+            "lag": 0
+          },
+          {
+            "id": "D",
+            "type": "FS",
+            "lag": 0
+          }
+        ],
+        "cost": 40,
+        "workers": 0,
+        "progress": 0,
+        "minDuration": 4,
+        "crashSlope": 30,
+        "owner": "",
+        "actualCost": 0,
+        "group": "Thi công",
+        "stage": -1
+      },
+      {
+        "id": "G",
+        "name": "G",
+        "duration": 6,
+        "deps": [
+          {
+            "id": "E",
+            "type": "FS",
+            "lag": 0
+          },
+          {
+            "id": "F",
+            "type": "FS",
+            "lag": 0
+          }
+        ],
+        "cost": 70,
+        "workers": 0,
+        "progress": 0,
+        "minDuration": 6,
+        "crashSlope": 0,
+        "owner": "",
+        "actualCost": 0,
+        "group": "Thi công",
+        "stage": -1
+      }
+    ],
+    "boq": [],
+    "estimate": {
+      "overhead": 5,
+      "contingency": 5,
+      "vat": 0,
+      "other": 0
+    },
+    "finance": {
+      "principal": 0,
+      "rate": 0,
+      "months": 12,
+      "method": "annuity",
+      "discount": 0,
+      "flows": [
+        0,
+        0
+      ]
+    },
+    "risks": [],
+    "baseline": null,
+    "history": [
+      {
+        "at": "2026-10-18T16:51:03.026Z",
+        "text": "Nhập bài tập từ Dữ liệu QLDA.docx; chưa có số liệu nhân công hoặc lãi vay.",
+        "actor": "Cá nhân"
+      }
+    ]
+  }
+}
