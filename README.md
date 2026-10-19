@@ -15,18 +15,40 @@ Mở **http://127.0.0.1:4173/**. Các tài nguyên giao diện đã nằm trong 
 
 Bạn cũng có thể mở `index.html` trực tiếp để dùng công cụ cá nhân với mô hình Canvas dự phòng. WebGL dùng khi mở qua máy chủ HTTP. Dùng địa chỉ máy chủ ở trên sẽ bảo đảm font chữ, lưu dữ liệu và chế độ cộng tác hoạt động nhất quán.
 
-## Bản web trên Cloudflare Pages
+## Bản web trên Cloudflare (dùng ngay, làm việc nhóm)
 
-Dùng ngay tại **https://quanlyduanxaydung.pages.dev** (chế độ Cá nhân, dữ liệu lưu trên trình duyệt; chế độ đội dự án cần chạy `npm start`). Bài tập trong Dữ liệu QLDA.docx có sẵn: bài A–G (`/?project=nhom-qlda`) và bài 11 công tác A–K (`/?project=bai-a-k`).
+Mở **https://quanlyduanxaydung.pages.dev**.
+
+- **Một mình:** chọn *Tôi làm cá nhân*. Dữ liệu lưu trên trình duyệt đang dùng (trang **Dự án của tôi**).
+- **Cả nhóm:** chọn *Tôi quản lý đội dự án* → **Đăng nhập bằng Google** (lần đầu là tạo tài khoản) → trang **Dự án nhóm**.
+  - *Đưa lên nhóm*: chép một dự án trên trình duyệt thành dự án dùng chung.
+  - *Thành viên · mời bằng Gmail*: gõ Gmail bạn cùng nhóm và chọn quyền (chỉnh sửa / bình luận / chỉ xem). Người đó chỉ cần đăng nhập Google bằng đúng Gmail ấy là thấy dự án, mời trước khi họ có tài khoản cũng được. Vẫn có thể gửi liên kết mời dùng một lần (7 ngày).
+  - Khi một người lưu, máy những người đang mở cùng dự án tự tải bản mới sau vài giây. Hai người sửa cùng lúc thì người lưu sau được báo để tải lại, không ghi đè âm thầm.
+- Bài tập trong Dữ liệu QLDA.docx có sẵn: bài A–G (`/?project=nhom-qlda`) và bài 11 công tác A–K (`/?project=bai-a-k`).
+
+Kiến trúc: trang tĩnh `dist/` + API `functions/api/[[path]].js` (Cloudflare Pages Functions) + CSDL **D1** `qlda` (bảng trong `migrations/`). Đăng nhập dùng Google ID token, máy chủ tự kiểm chữ ký RS256, không cần client secret. Cấu hình ở `wrangler.toml` (`GOOGLE_CLIENT_ID`, binding `DB`).
 
 Cập nhật bản web:
 
 ```sh
 npm run build:static
-npx wrangler pages deploy dist --project-name quanlyduanxaydung --branch main
+npx wrangler d1 migrations apply qlda --remote
+npx wrangler pages deploy --branch main
 ```
 
-`build:static` chép đúng danh sách file công khai của `server.cjs` vào `dist/` kèm header bảo mật (`_headers`).
+Chạy thử bản Cloudflare trên máy (cần `.dev.vars` chứa `DEV_LOGIN=1` để có ô *Đăng nhập thử*; ô này tự tắt khi không chạy ở localhost):
+
+```sh
+npm run build:static
+npx wrangler d1 migrations apply qlda --local
+npx wrangler pages dev --port 8788
+node tests/cloudflare-api.test.cjs
+node tests/ui-team-cloudflare.cjs
+```
+
+Google Cloud → Google Auth Platform → Clients: *Authorized JavaScript origins* phải có `https://quanlyduanxaydung.pages.dev` (và `http://localhost:8788` để chạy thử). Nếu app ở chế độ *Testing*, thêm Gmail của các bạn trong nhóm vào *Audience → Test users*, hoặc bấm *Publish app*.
+
+`npm start` (server.cjs + SQLite, đăng nhập bằng email/mật khẩu) vẫn dùng được cho mạng nội bộ.
 
 ## Bắt đầu trong hai chế độ
 

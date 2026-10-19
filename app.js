@@ -114,6 +114,7 @@
     modalHandler = null,
     team = null,
     serverAvailable = false,
+    serverInfo = null,
     toastTimer,
     heroProgress = 0.65;
   let heroScene = new BuildScene($("#hero-canvas"), () => heroProgress);
@@ -212,6 +213,7 @@
             "team",
           ]
         : [
+            "portfolio",
             "overview",
             "model",
             "schedule",
@@ -228,7 +230,7 @@
       items
         .map(
           (k) =>
-            `<button data-page="${k}" class="${page === k ? "active" : ""}" ${page === k ? 'aria-current="page"' : ""}>${icon(k)}<span>${names[k]}</span></button>`,
+            `<button data-page="${k}" class="${page === k ? "active" : ""}" ${page === k ? 'aria-current="page"' : ""}>${icon(k)}<span>${k === "portfolio" ? (team ? "Dự án nhóm" : "Dự án của tôi") : names[k]}</span></button>`,
         )
         .join(""),
     );
@@ -260,7 +262,14 @@
       // Chữ viết tắt của tài khoản đang đăng nhập; chế độ cá nhân hiện "CN".
       const words = (team?.name || "").trim().split(/\s+/).filter(Boolean);
       avatar.textContent = words.length ? (words.length > 1 ? words[0][0] + words[words.length - 1][0] : words[0].slice(0, 2)).toUpperCase() : "CN";
-      avatar.title = team ? "Tài khoản: " + team.name : "Chế độ cá nhân · bấm để kết nối đội dự án";
+      avatar.title = team ? "Tài khoản: " + team.name : "Chế độ cá nhân · bấm để đăng nhập làm việc nhóm";
+      if (team?.picture) {
+        const img = document.createElement("img");
+        img.src = team.picture;
+        img.alt = "";
+        img.referrerPolicy = "no-referrer";
+        avatar.replaceChildren(img);
+      }
     }
     $("#footer-calendar").textContent =
       `Lịch ${project().workdays.length} ngày/tuần · Thời lượng & lag theo ngày làm việc`;
@@ -342,6 +351,7 @@
       if (page === "model") mountScene();
       if (page === "team" && team) loadComments();
       if (page === "network") mountGraphEditor();
+      if (page === "portfolio" && !team && googleAuth()) googleButton($("#portfolio-google"), afterSignIn);
     } catch (e) {
       $("#main").innerHTML = DOMPurify.sanitize(
         `<div class="error-page"><h2>Kiểm tra dữ liệu dự án</h2><p>${escape(e.message)}</p><button class="btn ghost" data-action="import">Nhập bản sao JSON</button></div>`,
@@ -413,34 +423,44 @@
     );
   }
   function portfolioView() {
-    const ps = db.projects,
-      all = ps.map((p) => ({ p, r: Planner.active(p) })),
-      total = ps.reduce((s, p) => s + p.tasks.length, 0);
+    const ps = db.projects, current = project();
+    const cost = (p) => p.tasks.reduce((s, t) => s + t.cost, 0);
+    const card = (p, scope) => {
+      let r;
+      try {
+        r = Planner.active(p);
+      } catch {
+        r = { duration: 0, critical: [] };
+      }
+      const top =
+        scope === "team"
+          ? `${escape(roleName(p._role)).toUpperCase()}${p._members ? " · " + p._members + " THÀNH VIÊN" : ""}`
+          : "TRÊN TRÌNH DUYỆT NÀY";
+      const foot =
+        scope === "team"
+          ? `<small class="project-card-by">Chủ dự án: ${escape(p._owner || team?.name || "")}${p._updatedBy ? " · sửa gần nhất: " + escape(p._updatedBy) : ""}</small>`
+          : "";
+      const open = scope === "local-only" ? `data-share-project="${escape(p.id)}"` : `data-open-project="${escape(p.id)}"`;
+      return `<div class="project-card-wrap"><button class="project-card ${scope !== "local-only" && p.id === current?.id ? "current" : ""}" ${open}><div class="project-art">${top}<p class="member-count">${p.tasks.length} công việc · ${r.critical.length} găng</p></div><div class="project-card-body"><h3>${escape(p.name)}</h3><div class="project-card-meta"><span>${r.duration} ngày làm việc</span><span>${shortMoney(cost(p), p.currency)}</span></div>${foot}</div></button>${scope === "local" && serverAvailable ? `<button class="btn ghost small" data-share-project="${escape(p.id)}">Đưa lên nhóm ↗</button>` : ""}${scope === "local-only" ? `<button class="btn primary small" data-share-project="${escape(p.id)}">Đưa lên nhóm ↗</button>` : ""}${scope === "team" && p._role === "owner" ? `<button class="btn ghost small" data-manage-members="${escape(p.id)}">Thành viên ↗</button>` : ""}</div>`;
+    };
+    const signIn = !team && serverAvailable
+      ? `<section class="panel team-signin"><div class="panel-body"><div><h2>Làm việc nhóm</h2><p class="form-caption">${googleAuth() ? "Đăng nhập bằng Gmail để tạo dự án nhóm, mời bạn cùng làm bằng Gmail và cùng sửa một dự án. Lần đầu đăng nhập là tạo tài khoản." : "Kết nối máy chủ đi kèm để chia sẻ dự án và phân quyền."}</p></div>${googleAuth() ? '<div id="portfolio-google" class="google-signin"></div>' : '<button class="btn primary" data-action="team-connect">Kết nối đội dự án</button>'}</div></section>`
+      : "";
+    const localOnly = team ? localWorkspace().projects : [];
     return (
       heading(
-        "Danh mục dự án",
-        "Quản lý danh mục dự án và đi sâu vào công trình cần bạn chú ý.",
-        `<button class="btn ghost" data-action="team-connect">⌘ ${team ? "Tài khoản" : "Kết nối đội dự án"}</button><button class="btn primary" data-action="new-project">+ Tạo dự án</button>`,
+        team ? "Dự án nhóm" : "Dự án của tôi",
+        team
+          ? `Đăng nhập ${escape(team.email)} · mọi thành viên được mời thấy cùng dữ liệu, thay đổi của người khác tự cập nhật sau vài giây.`
+          : "Các dự án lưu trên trình duyệt này. Chọn một dự án để mở; đưa lên nhóm khi muốn cùng làm với bạn bè.",
+        `${team ? '<button class="btn ghost" data-action="team-connect">Tài khoản</button>' : ""}<button class="btn ghost" data-action="import">↑ Nhập JSON</button><button class="btn primary" data-action="new-project">+ Tạo dự án ${team ? "nhóm" : ""}</button>`,
       ) +
-      `<div class="kpi-grid">${kpi("Dự án trong không gian", ps.length, "Mở một dự án để xem chi tiết", "accent")}${kpi("Tổng công việc", total, "Phân công theo người phụ trách")}${kpi(
-        "Công việc găng",
-        all.reduce((s, x) => s + x.r.critical.length, 0),
-        "Tổng từ các dự án",
-        "danger",
-      )}${kpi("Cách lưu dữ liệu", team ? "Chung" : "Cục bộ", team ? "Có tài khoản và phân quyền" : "Có thể kết nối máy chủ để cộng tác")}</div>` +
-      (!team
-        ? '<div class="callout">Bạn đang xem danh mục trên trình duyệt này. Chọn <strong>Kết nối đội dự án</strong> khi chạy bằng máy chủ đi kèm để đăng nhập, chia sẻ dự án, phân quyền và lưu lịch sử trên máy chủ.</div>'
+      signIn +
+      `<section class="panel"><div class="panel-head"><div><h2>${team ? "Dự án nhóm trên máy chủ" : "Trên trình duyệt này"} · ${ps.length}</h2><p>${team ? "Dữ liệu dùng chung, lưu trên Cloudflare." : "Chỉ máy và trình duyệt này thấy. Xuất JSON để sao lưu hoặc chuyển máy."}</p></div></div><div class="panel-body"><div class="project-cards">${ps.map((p) => card(p, team ? "team" : "local")).join("") || '<p class="form-caption">Chưa có dự án. Tạo mới hoặc đưa dự án từ trình duyệt lên.</p>'}</div></div></section>` +
+      (team && localOnly.length
+        ? `<section class="panel"><div class="panel-head"><div><h2>Dự án trên trình duyệt này · ${localOnly.length}</h2><p>Chưa chia sẻ. Bấm “Đưa lên nhóm” để tạo bản dùng chung rồi mời bạn bằng Gmail.</p></div></div><div class="panel-body"><div class="project-cards">${localOnly.map((p) => card(p, "local-only")).join("")}</div></div></section>`
         : "") +
-      `<div class="project-cards">${all
-        .map(
-          ({ p, r }) =>
-            `<button class="project-card" data-open-project="${escape(p.id)}"><div class="project-art">DỰ ÁN XÂY DỰNG · ${escape(p.currency)}<p class="member-count">${new Set(p.tasks.map((t) => t.owner).filter(Boolean)).size} người phụ trách</p></div><div class="project-card-body"><span class="badge ${r.critical.length ? "warning" : "neutral"}">${r.critical.length} công việc găng</span><h3>${escape(p.name)}</h3><div class="project-card-meta"><span>${r.duration} ngày làm việc</span><span>${shortMoney(
-              p.tasks.reduce((s, t) => s + t.cost, 0),
-              p.currency,
-            )}</span></div></div></button>`,
-        )
-        .join("")}</div>` +
-      `<div style="margin-top:25px" class="heading-actions"><button class="btn ghost small" data-action="sample-construction">+ Mẫu công trình</button><button class="btn ghost small" data-action="sample-textbook">+ Bài mẫu CPM</button><button class="btn ghost small" data-action="import">↑ Nhập JSON</button></div>`
+      `<div style="margin-top:25px" class="heading-actions"><button class="btn ghost small" data-action="sample-construction">+ Mẫu công trình</button><button class="btn ghost small" data-action="sample-textbook">+ Bài mẫu CPM</button>${team ? "" : '<button class="btn ghost small" data-action="deleted-projects">Dự án đã xóa</button>'}</div>`
     );
   }
   function gantt(r, compact = false) {
@@ -1264,7 +1284,7 @@
       heading(
         "Thành viên & lịch sử",
         "Phân công rõ đầu mối, theo dõi thay đổi và quyền truy cập.",
-        `${team?'<button class="btn ghost" data-action="create-invite">Mời tham gia</button>':''}<button class="btn primary" data-action="team-connect">${team ? "Quản lý tài khoản" : "Kết nối không gian chung"} ↗</button>`,
+        `${team?'<button class="btn ghost" data-action="create-invite">Mời bằng liên kết</button><button class="btn ghost" data-action="members">'+(googleAuth()?'Thành viên · mời bằng Gmail':'Thành viên & quyền')+'</button>':''}<button class="btn primary" data-action="team-connect">${team ? "Quản lý tài khoản" : "Kết nối không gian chung"} ↗</button>`,
       ) +
       (!team
         ? '<div class="callout warning">Đang ở chế độ cục bộ. Các tên bên dưới là người phụ trách công việc, chưa phải tài khoản đăng nhập. Chạy bằng máy chủ đi kèm và kết nối để dùng quyền chủ dự án, chỉnh sửa, chỉ xem và chống ghi đè khi nhiều người sửa.</div>'
@@ -1316,8 +1336,8 @@
   let latestInvite=null;
   function commentsHTML(){const p=project();return panel('Bình luận dự án','Mọi thành viên được xem; quyền bình luận được kiểm tra ở máy chủ.',team?`<div class="panel-body">${p._role==='viewer'?'<p class="form-caption">Bạn có quyền chỉ xem.</p>':'<form data-form="comment"><div class="field"><label for="comment-body">Nội dung</label><textarea id="comment-body" name="nen_commentBody" maxlength="5000" rows="3" required placeholder="Trao đổi về tiến độ, khối lượng hoặc phương án…"></textarea></div><button class="btn primary small" type="submit">Gửi bình luận</button></form>'}<button class="text-link" data-action="refresh-comments" style="margin:16px 0">Làm mới bình luận</button><div id="comments-list" aria-live="polite">Đang tải…</div></div>`:'<div class="panel-body"><p>Kết nối không gian chung để mời thành viên và bình luận.</p><button class="btn primary small" data-action="team-connect">Kết nối</button></div>');}
   async function loadComments(){if(!team||!$('#comments-list'))return;const id=project().id;try{const data=await api('/api/projects/'+encodeURIComponent(id)+'/comments');if(project().id!==id||!$('#comments-list'))return;$('#comments-list').innerHTML=DOMPurify.sanitize(data.comments.length?data.comments.map(c=>`<article class="project-comment"><header><strong>${escape(c.author)}</strong><time>${new Date(c.at).toLocaleString('vi-VN',{timeZone:'Asia/Bangkok'})}</time></header><p>${escape(c.body).replace(/\n/g,'<br>')}</p></article>`).join(''):'<p class="form-caption">Chưa có bình luận.</p>');}catch(error){if($('#comments-list'))$('#comments-list').textContent=error.message;}}
-  async function createInvite(){if(!team)return connectModal();if(project()._role!=='owner')throw Error('Chỉ chủ dự án tạo được lời mời.');modal('Mời tham gia dự án',selectField('inviteRole','Quyền của người tham gia','viewer',[['viewer','Chỉ xem'],['commenter','Xem và bình luận'],['editor','Chỉnh sửa và bình luận']])+'<p class="form-caption" style="margin-top:15px">Mỗi liên kết dùng một lần, hiệu lực 48 giờ. Người nhận có thể đăng nhập hoặc tạo tài khoản khi tham gia.</p>',async f=>{const id=project().id,result=await api('/api/projects/'+encodeURIComponent(id)+'/invites','POST',{role:String(f.get('inviteRole'))}),url=new URL('/',location.origin);url.searchParams.set('invite',result.token);latestInvite={projectId:id,url:url.href,expires:result.expires,role:String(f.get('inviteRole'))};page='team';render();},'Tạo liên kết mời');}
-  async function openInvitation(){const token=new URLSearchParams(location.search).get('invite');if(!token)return;try{const info=await api('/api/invites/'+encodeURIComponent(token)),me=await api('/api/me');if(me.user){const joined=await api('/api/invites/'+encodeURIComponent(token),'POST',{});history.replaceState(null,'',location.pathname);await loadTeam(joined.user);db.selected=joined.projectId;chooseMode('business');page='team';render();return;}
+  async function createInvite(){if(!team)return connectModal();if(project()._role!=='owner')throw Error('Chỉ chủ dự án tạo được lời mời.');modal('Mời tham gia dự án',selectField('inviteRole','Quyền của người tham gia','viewer',[['viewer','Chỉ xem'],['commenter','Xem và bình luận'],['editor','Chỉnh sửa và bình luận']])+'<p class="form-caption" style="margin-top:15px">Mỗi liên kết dùng một lần. Người nhận mở liên kết, đăng nhập rồi tham gia dự án.</p>',async f=>{const id=project().id,result=await api('/api/projects/'+encodeURIComponent(id)+'/invites','POST',{role:String(f.get('inviteRole'))}),url=new URL('/',location.origin);url.searchParams.set('invite',result.token);latestInvite={projectId:id,url:url.href,expires:result.expires,role:String(f.get('inviteRole'))};page='team';render();},'Tạo liên kết mời');}
+  async function openInvitation(){const token=new URLSearchParams(location.search).get('invite');if(!token)return;try{const info=await api('/api/invites/'+encodeURIComponent(token)),me=await api('/api/me');serverInfo=me;serverAvailable=true;if(!me.user&&me.auth==='google'){modal('Tham gia '+info.name,'<p class="form-caption">Bạn được mời với quyền '+escape(roleName(info.role))+'. Đăng nhập bằng Gmail để tham gia; lần đầu đăng nhập là tạo tài khoản.</p><div id="invite-google" class="google-signin"></div>',()=>{},'Đóng','LỜI MỜI');googleButton($('#invite-google'),afterSignIn);return;}if(me.user){const joined=await api('/api/invites/'+encodeURIComponent(token),'POST',{});history.replaceState(null,'',location.pathname);await loadTeam(joined.user);db.selected=joined.projectId;chooseMode('business');page='team';render();return;}
     modal('Tham gia '+info.name,`<p class="form-caption">Quyền được mời: ${escape(info.role)}. Tạo tài khoản để tham gia, hoặc đăng nhập tài khoản đã có rồi mở lại liên kết này.</p><div class="form-grid">${field('name','Họ tên','','text','maxlength="120"',true)}${field('email','Email','','email','maxlength="160"',true)}${field('password','Mật khẩu','','password','minlength="10" maxlength="128" autocomplete="new-password"',true)}</div><button type="button" class="text-link" data-action="team-connect" style="margin-top:18px">Tôi đã có tài khoản · đăng nhập</button>`,async f=>{const joined=await api('/api/invites/'+encodeURIComponent(token),'POST',{name:String(f.get('name')),email:String(f.get('email')),password:String(f.get('password'))});history.replaceState(null,'',location.pathname);await loadTeam(joined.user);db.selected=joined.projectId;chooseMode('business');page='team';render();},'Tham gia dự án');
   }catch(error){toast(error.message,true);}}
 
@@ -1521,6 +1541,8 @@
       throw new Error("Tối đa 100 dự án trong bản chạy thử.");
     validate(p);
     if (team) {
+      // Mã dự án trên máy chủ là chung cho mọi người: luôn tạo mã mới để không trùng bài mẫu của người khác.
+      p.id = uid();
       const result = await api("/api/projects", "POST", { project: p });
       p._version = result.version;
       p._role = "owner";
@@ -1772,6 +1794,178 @@
     if (!r.ok) throw new Error(data.error || "Yêu cầu thất bại.");
     return data;
   }
+  // ---------- Làm việc nhóm: đăng nhập Google, đưa dự án lên nhóm, đồng bộ ----------
+  const ROLE_NAMES = { owner: "Chủ dự án", editor: "Chỉnh sửa", commenter: "Xem và bình luận", viewer: "Chỉ xem" };
+  const roleName = (role) => ROLE_NAMES[role] || role || "";
+  const googleAuth = () => serverInfo?.auth === "google";
+  let googleScript = null, pendingShare = null, syncTimer = null, syncBusy = false, syncNotified = 0;
+  function loadGoogle() {
+    if (window.google?.accounts?.id) return Promise.resolve();
+    googleScript ??= new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://accounts.google.com/gsi/client";
+      s.async = true;
+      s.onload = resolve;
+      s.onerror = () => {
+        googleScript = null;
+        reject(Error("Không tải được nút đăng nhập Google. Kiểm tra kết nối mạng rồi thử lại."));
+      };
+      document.head.append(s);
+    });
+    return googleScript;
+  }
+  /** Vẽ nút "Đăng nhập bằng Google" vào target; after(user) chạy khi máy chủ đã nhận token. */
+  async function googleButton(target, after) {
+    if (!target) return;
+    if (!serverInfo?.googleClientId) {
+      target.textContent = "Máy chủ chưa cấu hình GOOGLE_CLIENT_ID.";
+      return;
+    }
+    try {
+      await loadGoogle();
+      google.accounts.id.initialize({
+        client_id: serverInfo.googleClientId,
+        ux_mode: "popup",
+        auto_select: false,
+        context: "signin",
+        callback: async ({ credential }) => {
+          try {
+            const result = await api("/api/auth/google", "POST", { credential });
+            await after(result.user);
+          } catch (error) {
+            toast(error.message, true);
+          }
+        },
+      });
+      target.replaceChildren();
+      google.accounts.id.renderButton(target, { theme: "outline", size: "large", text: "signin_with", shape: "pill", locale: "vi", width: 280 });
+    } catch (error) {
+      target.textContent = error.message;
+    }
+  }
+  /** Sau khi đăng nhập: vào không gian nhóm; nếu đang chờ đưa một dự án lên thì đưa luôn. */
+  async function afterSignIn(user) {
+    if ($("#modal").open) $("#modal").close();
+    sessionUser = null;
+    mode = "business";
+    $("#landing").hidden = true;
+    $("#app").hidden = false;
+    heroScene?.destroy();
+    heroScene = null;
+    await loadTeam(user);
+    toast("Xin chào " + user.name + ". Đây là các dự án nhóm của bạn.");
+    if (pendingShare) {
+      const local = pendingShare;
+      pendingShare = null;
+      await uploadProject(local);
+    }
+  }
+  /** Đưa bản sao một dự án trên trình duyệt lên máy chủ để cả nhóm cùng làm. */
+  async function shareToTeam(id) {
+    const local = copy((team ? localWorkspace() : db).projects.find((p) => p.id === id) || project());
+    if (!team) {
+      pendingShare = local;
+      return connectModal();
+    }
+    await uploadProject(local);
+  }
+  function localWorkspace() {
+    try {
+      return loadWorkspace(localStorage.getItem(KEY)) || { projects: [] };
+    } catch {
+      return { projects: [] };
+    }
+  }
+  async function uploadProject(local) {
+    const p = normalizeProject(copy(local));
+    delete p._role;
+    delete p._version;
+    p.id = uid();
+    p.history = [{ at: new Date().toISOString(), text: "Đưa lên nhóm từ dự án trên trình duyệt", actor: team.name }];
+    validate(p);
+    await api("/api/projects", "POST", { project: p });
+    await loadTeam(team);
+    db.selected = p.id;
+    page = "portfolio";
+    render();
+    toast("Đã đưa “" + p.name + "” lên nhóm. Mời bạn cùng làm bằng Gmail.");
+    await membersModal();
+  }
+  /** Thành viên khác vừa lưu: tải bản mới nếu mình không đang nhập liệu. */
+  async function syncTeamProject() {
+    if (!team || syncBusy || document.hidden) return;
+    const p = project();
+    if (!p?._version) return;
+    syncBusy = true;
+    try {
+      const v = await api("/api/projects/" + encodeURIComponent(p.id) + "/version");
+      if (v.version <= p._version || v.byMe) return;
+      const typing = document.activeElement?.closest?.("#main input, #main textarea, #main select") || $("#modal").open;
+      if (typing) {
+        // Đang gõ dở: không tải đè, chỉ báo một lần cho phiên bản này.
+        if (syncNotified !== v.version) toast((v.by || "Thành viên khác") + " vừa cập nhật dự án. Lưu xong phần đang sửa rồi bấm Tài khoản → Tải lại dự án.");
+        syncNotified = v.version;
+        return;
+      }
+      const fresh = await api("/api/projects/" + encodeURIComponent(p.id));
+      const index = db.projects.findIndex((x) => x.id === p.id);
+      if (index < 0) return;
+      db.projects[index] = normalizeProject(fresh.project);
+      planningDrafts.delete(p.id);
+      optimization = null;
+      const y = window.scrollY;
+      render();
+      window.scrollTo(0, y);
+      toast((v.by || "Thành viên khác") + " vừa cập nhật dự án · đã tải bản mới.");
+    } catch {
+      // Mạng chập chờn: thử lại ở lượt sau.
+    } finally {
+      syncBusy = false;
+    }
+  }
+  function startSync() {
+    clearInterval(syncTimer);
+    syncTimer = setInterval(syncTeamProject, 12000);
+  }
+  async function membersModalGoogle() {
+    const p = project(), id = encodeURIComponent(p.id), owner = p._role === "owner";
+    const data = await api("/api/projects/" + id + "/members");
+    const links = owner ? (await api("/api/projects/" + id + "/invites").catch(() => ({ invites: [] }))).invites : [];
+    const roles = [["editor", "Chỉnh sửa"], ["commenter", "Xem và bình luận"], ["viewer", "Chỉ xem"], ["owner", "Chủ dự án"]];
+    const face = (m) => (m.picture ? `<img class="member-face" src="${escape(m.picture)}" alt="" referrerpolicy="no-referrer">` : `<i class="member-face">${escape((m.name || m.email || "?").trim().slice(0, 1).toUpperCase())}</i>`);
+    const roleControl = (m) =>
+      owner && m.id !== data.ownerId
+        ? `<select data-member-role="${m.id}" aria-label="Quyền của ${escape(m.name)}">${roles.map(([v, l]) => `<option value="${v}" ${m.role === v ? "selected" : ""}>${l}</option>`).join("")}</select>`
+        : `<span class="badge">${escape(m.id === data.ownerId ? "Chủ dự án gốc" : roleName(m.role))}</span>`;
+    const memberRows = data.members
+      .map((m) => `<div class="member-row"><span class="member-who">${face(m)}<span><strong>${escape(m.name)}</strong><small>${escape(m.email)}</small></span></span><span class="member-actions">${roleControl(m)}${(owner && m.id !== data.ownerId) || (m.id === team.id && m.id !== data.ownerId) ? `<button type="button" class="btn ghost small" data-remove-member="${m.id}">${m.id === team.id ? "Rời dự án" : "Gỡ"}</button>` : ""}</span></div>`)
+      .join("");
+    const pendingRows = (data.pending || [])
+      .map((x) => `<div class="member-row pending"><span class="member-who"><i class="member-face">@</i><span><strong>${escape(x.email)}</strong><small>Chờ đăng nhập lần đầu · ${escape(roleName(x.role))}</small></span></span><button type="button" class="btn ghost small" data-cancel-email="${escape(x.email)}">Hủy lời mời</button></div>`)
+      .join("");
+    const linkRows = links
+      .map((i) => `<div class="member-row"><span>Liên kết · ${escape(roleName(i.role))}<small class="muted" style="margin-left:8px">hết hạn ${new Date(i.expires).toLocaleString("vi-VN", { timeZone: "Asia/Bangkok" })}</small></span><button type="button" class="btn ghost small" data-revoke-invite="${escape(i.id)}">Thu hồi</button></div>`)
+      .join("");
+    const addForm = owner
+      ? `<div class="form-section">MỜI BẠN CÙNG NHÓM BẰNG GMAIL</div><div class="form-grid">${field("memberEmail", "Gmail", "", "email", 'maxlength="160" placeholder="ban.cung.nhom@gmail.com" autocomplete="off"')}${selectField("memberRole", "Quyền", "editor", roles.slice(0, 3))}</div><p class="form-caption">Người được mời chỉ cần mở web và đăng nhập Google bằng đúng Gmail này là thấy dự án. Có thể mời trước khi họ có tài khoản.</p>`
+      : `<p class="form-caption">Chỉ chủ dự án mời hoặc đổi quyền thành viên.</p>`;
+    modal(
+      "Thành viên dự án · " + p.name,
+      `<div class="member-list">${memberRows}${pendingRows}</div>${addForm}${owner ? `<div class="edit-delete"><span class="form-caption">Hoặc gửi liên kết mời dùng một lần (hiệu lực 7 ngày).</span><button type="button" class="btn ghost small" data-action="create-invite">Tạo liên kết mời</button></div>${linkRows ? `<div class="member-list">${linkRows}</div>` : ""}` : ""}`,
+      owner
+        ? async (f) => {
+            const email = String(f.get("memberEmail") || "").trim();
+            if (!email) return;
+            const result = await api("/api/projects/" + id + "/members", "POST", { email, role: String(f.get("memberRole")) });
+            toast(result.pending ? "Đã mời " + email + ". Họ đăng nhập Google bằng Gmail này là vào được dự án." : "Đã thêm " + email + " vào dự án.");
+            setTimeout(() => membersModal().catch((e) => toast(e.message, true)), 60);
+          }
+        : () => {},
+      owner ? "Mời vào dự án ↗" : "Đóng",
+      "ĐỘI DỰ ÁN",
+    );
+    if ($("#f-memberEmail")) $("#f-memberEmail").required = false;
+  }
   async function loadTeam(user) {
     team = user;
     graphDrafts.clear();
@@ -1794,6 +1988,7 @@
     optimization = null;
     page = mode === "business" ? "portfolio" : "overview";
     render();
+    startSync();
   }
   async function connectModal() {
     if (team) {
@@ -1804,6 +1999,24 @@
         "Đóng",
         "TÀI KHOẢN",
       );
+      return;
+    }
+    if (googleAuth()) {
+      const dev = serverInfo.devLogin;
+      modal(
+        "Đăng nhập để làm việc nhóm",
+        `<p class="form-caption">Dùng tài khoản Gmail. Lần đầu đăng nhập là tạo tài khoản; bạn thấy ngay các dự án được mời theo Gmail này.</p><div id="modal-google" class="google-signin"></div>${dev ? `<div class="form-section">ĐĂNG NHẬP THỬ · CHỈ KHI CHẠY TRÊN MÁY</div><div class="form-grid">${field("devEmail", "Gmail thử", "", "email", 'maxlength="160"')}${field("devName", "Tên hiển thị", "", "text", 'maxlength="120"')}</div>` : ""}`,
+        dev
+          ? async (f) => {
+              const result = await api("/api/auth/dev", "POST", { email: String(f.get("devEmail")), name: String(f.get("devName") || "") });
+              await afterSignIn(result.user);
+            }
+          : () => {},
+        dev ? "Đăng nhập thử ↗" : "Đóng",
+        "TÀI KHOẢN",
+      );
+      if ($("#f-devName")) $("#f-devName").required = false;
+      googleButton($("#modal-google"), afterSignIn);
       return;
     }
     if (!serverAvailable) {
@@ -1841,6 +2054,7 @@
   }
   async function membersModal() {
     if (!team) return connectModal();
+    if (googleAuth()) return membersModalGoogle();
     const p = project(),
       data = await api(
         "/api/projects/" + encodeURIComponent(p.id) + "/members",
@@ -2164,6 +2378,8 @@
     },
     logout: async () => {
       await api("/api/logout", "POST", {});
+      clearInterval(syncTimer);
+      window.google?.accounts?.id?.disableAutoSelect?.();
       team = null;
       try {
         db = loadWorkspace(localStorage.getItem(KEY));
@@ -2202,6 +2418,9 @@
       if(e.dataset.graphZoom){const d=activeGraphDraft();d.zoom=Math.max(.2,Math.min(3,d.zoom*Number(e.dataset.graphZoom)));const svg=$('#network-svg svg'),bounds=GraphBoard.bounds(d.graph,d.positions);svg.style.width=bounds.width*d.zoom+'px';svg.style.height=bounds.height*d.zoom+'px';return;}
       if(e.dataset.exportFormat){await exportPages(e.dataset.exportFormat);return;}
       if(e.dataset.restoreProject){await restoreProject(e.dataset.restoreProject);return;}
+      if(e.dataset.shareProject){await shareToTeam(e.dataset.shareProject);return;}
+      if(e.dataset.manageMembers){db.selected=e.dataset.manageMembers;render();await membersModal();return;}
+      if(e.dataset.cancelEmail){await api("/api/projects/"+encodeURIComponent(project().id)+"/email-invites","DELETE",{email:e.dataset.cancelEmail});toast("Đã hủy lời mời "+e.dataset.cancelEmail+".");await membersModal();return;}
       if(e.dataset.removeMember){await api("/api/projects/"+encodeURIComponent(project().id)+"/members/"+encodeURIComponent(e.dataset.removeMember),"DELETE");toast("Đã gỡ thành viên khỏi dự án.");if(Number(e.dataset.removeMember)===team?.id){$("#modal").close();await loadTeam(team);}else await membersModal();return;}
       if(e.dataset.revokeInvite){await api("/api/projects/"+encodeURIComponent(project().id)+"/invites/"+encodeURIComponent(e.dataset.revokeInvite),"DELETE");toast("Đã thu hồi lời mời.");await membersModal();return;}
       if (e.dataset.mode)
@@ -2535,12 +2754,15 @@
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         serverAvailable = Boolean(data && ("setup" in data || "user" in data));
+        serverInfo = data || null;
+        if (page === "portfolio" && !team) render();
         sessionUser = data?.user || null;
       })
       .catch(() => {});
   document.addEventListener('click',event=>{const button=event.target.closest('[data-camera-action]');if(button)(button.closest('.hero-world')?heroScene:scene)?.adjustCamera?.(button.dataset.cameraAction);});
   const heroPresets=$('.hero-presets');if(heroPresets){heroPresets.innerHTML=DOMPurify.sanitize(constructionControls('hero',ConstructionSequence.nearest(heroProgress)));updateHeroProcess();}
   document.addEventListener('change',event=>{
+    if(event.target.dataset.memberRole){api('/api/projects/'+encodeURIComponent(project().id)+'/members','POST',{userId:Number(event.target.dataset.memberRole),role:event.target.value}).then(()=>toast('Đã đổi quyền thành viên.')).catch(e=>{toast(e.message,true);membersModal().catch(()=>{});});return;}
     if(event.target.id==='graph-node-style'){graphNodeStyle=event.target.value;render();return;}
     if(event.target.id==='network-type'){networkType=event.target.value;render();return;}
     if(event.target.id==='pert-target'){pertTarget=Number(event.target.value);render();return;}

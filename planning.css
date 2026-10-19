@@ -104,3 +104,23 @@ td .code, .code { font-size: 11px; }
 .pert-grid input { width: 100%; max-width: 160px; padding: 9px 12px; border: 1px solid #c9d8ea; border-radius: 8px; font-size: 16px; color: var(--ink); }
 .pert-summary { margin-bottom: 20px; }
 @media (max-width: 760px) { .pert-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ===== Dự án & làm việc nhóm ===== */
+.project-card-wrap { display: flex; flex-direction: column; gap: 8px; }
+.project-card-wrap > .btn { align-self: flex-start; }
+.project-card.current { outline: 2px solid var(--brand-2); outline-offset: 2px; }
+.project-card-by { display: block; margin-top: 8px; font-size: 12px; color: var(--ink-soft); }
+.team-signin .panel-body { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+.team-signin h2 { margin: 0 0 6px; }
+.google-signin { min-height: 44px; display: flex; align-items: center; }
+#modal-google, #invite-google { margin: 18px 0 8px; }
+.member-list { display: grid; gap: 4px; margin-bottom: 18px; }
+.member-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.member-row.pending { opacity: 0.85; }
+.member-who { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.member-who > span { display: flex; flex-direction: column; min-width: 0; }
+.member-who small { color: var(--ink-soft); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.member-face { width: 34px; height: 34px; border-radius: 50%; flex: 0 0 34px; display: grid; place-items: center; background: #e6effa; color: var(--brand); font-style: normal; font-weight: 600; object-fit: cover; }
+.member-actions { display: flex; align-items: center; gap: 8px; }
+.member-actions select { padding: 6px 8px; border: 1px solid #c9d8ea; border-radius: 8px; font-size: 13px; }
+button.avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }

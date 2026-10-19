@@ -24,8 +24,10 @@ fs.writeFileSync(
     "/*",
     "  X-Content-Type-Options: nosniff",
     "  X-Frame-Options: DENY",
-    "  Referrer-Policy: same-origin",
-    "  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+    "  Referrer-Policy: strict-origin-when-cross-origin", // Google cần biết origin trang gọi nút đăng nhập
+    // Nút "Đăng nhập bằng Google" (Google Identity Services) cần đúng các đường dẫn /gsi/ của accounts.google.com;
+    // ảnh đại diện Google nằm ở *.googleusercontent.com.
+    "  Content-Security-Policy: default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; frame-src https://accounts.google.com/gsi/; connect-src 'self' https://accounts.google.com/gsi/; img-src 'self' data: blob: https://*.googleusercontent.com; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
     "  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()",
     "/vendor/*",
     "  Cache-Control: public, max-age=86400",

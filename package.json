@@ -5,9 +5,10 @@
   "description": "Vietnamese construction scheduling, estimating and project finance workspace",
   "scripts": {
     "start": "node server.cjs",
-    "test": "node tests/engine.test.cjs && node tests/planner.test.cjs && node tests/networks.test.cjs && node tests/graph-board.test.cjs && node tests/fleet.test.cjs && node tests/fleet-structures.test.cjs && node tests/server.test.cjs && node tests/collaboration.test.cjs",
+    "test": "node tests/engine.test.cjs && node tests/planner.test.cjs && node tests/networks.test.cjs && node tests/graph-board.test.cjs && node tests/fleet.test.cjs && node tests/fleet-structures.test.cjs && node tests/server.test.cjs && node tests/collaboration.test.cjs && node tests/google-token.test.cjs",
     "test:browser": "node tests/browser.test.cjs",
-    "build:static": "node scripts/build-static.cjs"
+    "build:static": "node scripts/build-static.cjs",
+    "test:cloudflare": "node tests/cloudflare-api.test.cjs"
   },
   "engines": {
     "node": ">=22.13.0"

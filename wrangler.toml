@@ -1,0 +1,16 @@
+# Cấu hình Cloudflare Pages: trang tĩnh trong dist/ + API nhóm trong functions/ + CSDL D1.
+# Deploy:   npm run build:static && npx wrangler pages deploy
+# Chạy thử: npm run build:static && npx wrangler pages dev   (mở http://localhost:8788)
+name = "quanlyduanxaydung"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-10-01"
+
+[vars]
+# OAuth Client ID (công khai) tạo ở Google Cloud → Google Auth Platform → Clients.
+GOOGLE_CLIENT_ID = "22604724088-qs2f9r8o4po1e063jt3kc8rnbt87e7s0.apps.googleusercontent.com"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "qlda"
+database_id = "793d6fd5-8d55-4c04-8508-170ddd98ef42"
+migrations_dir = "migrations"
