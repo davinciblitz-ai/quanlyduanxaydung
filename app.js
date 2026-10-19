@@ -821,7 +821,8 @@
         })
           .filter(([key]) => equipment[key])
           .map(([, label]) => label)
-          .join("  ·  ") || "Hoàn thiện công trường";
+          .join("  ·  ") ||
+        (current.progress >= 0.98 ? "Công trình hoàn thành · đã rút xe máy" : current.progress >= 0.4 ? "Không cần xe cơ giới ở bước này · cẩu tháp cấp vật tư" : "Không có xe cơ giới ở bước này");
       const active = r.rows.filter((t) => t.es <= sceneDay && t.ef > sceneDay);
       $("#scene-stage-label").textContent = active.length
         ? active.map((t) => t.name).join(" · ")

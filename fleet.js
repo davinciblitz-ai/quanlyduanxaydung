@@ -778,7 +778,18 @@
     loadingDumper() { return this.vehicles.find(v => v.kind === 'dumper' && v.docked && v.task === 'haul' && v.load < 1) || null; }
     tippingDumper() { return this.vehicles.find(v => v.kind === 'dumper' && v.mode === 'work' && v.task === 'tip') || null; }
 
-    update(dt, { progress = 0, paused = false, reduced = false } = {}) {
+    // Công trình đang hiện (giàn giáo, tháp cầu thang, chân cẩu, rào…) luôn thắng: xe nào chạm vào thì
+    // rời cảnh ngay thay vì lái xuyên qua. Xét cả tiến trình đích lẫn tiến trình cảnh đang hiển thị
+    // (cảnh trễ hơn khi chuyển bước) để không lọt khe lúc giàn giáo đang hiện dần hoặc tắt dần.
+    clearBuilt(progresses) {
+      const built = OBSTACLES.filter(o => progresses.some(p => p >= o.from && p <= o.to));
+      for (const v of this.vehicles) {
+        if (v.mode === 'off' || !v.pose) continue;
+        const box = footprintAt(v.spec, v.pose.x, v.pose.z, v.pose.yaw);
+        if (built.some(o => boxHitsRect(box, o.rect))) { v.placeAfter = null; v.remove(true); this.cleared = (this.cleared || 0) + 1; }
+      }
+    }
+    update(dt, { progress = 0, view = progress, paused = false, reduced = false } = {}) {
       dt = paused ? 0 : clamp(dt, 0, 0.1);
       this.time += dt;
       const target = nearestStep(clamp(progress, 0, 1));
@@ -794,7 +805,7 @@
         }
       }
       this.sinceApply += dt;
-      if (reduced) { this.settle(); return this.output(); }
+      if (reduced) { this.settle(); this.clearBuilt([progress, view]); return this.output(); }
       if (dt > 0) {
         if (this.sinceApply <= BUDGET) this.placeRequired(false, false);
         this.dispatch();
@@ -805,7 +816,10 @@
         for (const v of this.vehicles) if (v.mode !== 'off') v.update(dt);
         for (const v of this.vehicles) if (v.mode === 'placing') v.place(false);
         for (const v of this.vehicles) if (v.mode === 'wait-spawn') v.spawn();
-      } else this.pouringMixer = this.findPouringMixer();
+      }
+      this.clearBuilt([progress, view]);
+      // Tính sau khi mọi xe đã cập nhật: xe bồn vừa xả hết và tách ra thì bơm ngừng ngay trong khung này.
+      this.pouringMixer = this.findPouringMixer();
       return this.output();
     }
     // First come, first served: a request is granted only when all of its zones are free. A request

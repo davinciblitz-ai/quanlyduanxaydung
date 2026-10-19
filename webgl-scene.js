@@ -1256,7 +1256,7 @@ export class WebGLConstructionScene {
   // Advance the fleet (decisions come from the TARGET progress, not the smoothed view) and pose meshes.
   updateVehicles(dt, view) {
     const paused = WebGLConstructionScene.paused;
-    const out = this.fleet.update(dt, { progress: this.fleetProgress, paused, reduced: this.reduced });
+    const out = this.fleet.update(dt, { progress: this.fleetProgress, view: this.currentP ?? this.fleetProgress, paused, reduced: this.reduced });
     const meshes = this.vehicleMeshes;
     let pump = null, pumpMesh = null;
     for (const o of out) {
