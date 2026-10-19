@@ -117,13 +117,14 @@ window.ConstructionEquipment = (() => {
       );
     }
   }
-  function vehicleBase(s, x, z, alpha = 1, color = "#e1e6cd") {
+  // dir = 1: cab towards +x; dir = -1: mirrored (cab towards -x).
+  function vehicleBase(s, x, z, alpha = 1, color = "#e1e6cd", dir = 1) {
     const B = (a, b, c, w, h, d, col) =>
-      s.box(x + a, b, z + c, w, h, d, col, alpha);
+      s.box(x + (dir > 0 ? a : -(a + w)), b, z + c, w, h, d, col, alpha);
     B(-0.92, -0.17, -0.29, 1.88, 0.17, 0.58, "#48564b");
     for (const ax of [-0.63, -0.25, 0.65]) {
-      wheel(s, x + ax, -0.15, z + 0.34, 0.16, 0.11, alpha);
-      s.box(x + ax - 0.12, -0.29, z - 0.4, 0.24, 0.29, 0.13, "#26322e", alpha);
+      wheel(s, x + dir * ax, -0.15, z + 0.34, 0.16, 0.11, alpha);
+      s.box(x + dir * ax - 0.12, -0.29, z - 0.4, 0.24, 0.29, 0.13, "#26322e", alpha);
     }
     B(0.45, -0.02, -0.31, 0.52, 0.47, 0.62, color);
     B(0.48, 0.44, -0.34, 0.5, 0.06, 0.68, color);
@@ -136,9 +137,9 @@ window.ConstructionEquipment = (() => {
     B(0.6, 0.08, 0.33, 0.08, 0.035, 0.012, "#8a977d");
     B(0.84, 0.39, 0.32, 0.025, 0.11, 0.04, "#bac6a4");
   }
-  function mixer(s, x, z, time, alpha = 1) {
-    vehicleBase(s, x, z, alpha, "#dde5cf");
-    s.box(x - 0.82, 0.0, z - 0.29, 1.12, 0.12, 0.58, "#638755", alpha);
+  function mixer(s, x, z, time, alpha = 1, dir = 1) {
+    vehicleBase(s, x, z, alpha, "#dde5cf", dir);
+    s.box(dir > 0 ? x - 0.82 : x - 0.3, 0.0, z - 0.29, 1.12, 0.12, 0.58, "#638755", alpha);
     const rings = [
         [-0.78, 0.16],
         [-0.62, 0.32],
@@ -151,7 +152,7 @@ window.ConstructionEquipment = (() => {
       Array.from({ length: segments }, (_, i) => {
         const a = (i / segments) * Math.PI * 2 + spin;
         return [
-          x + dx,
+          x + dir * dx,
           0.42 + dx * 0.18 + Math.cos(a) * r,
           z + Math.sin(a) * r,
         ];
@@ -176,14 +177,14 @@ window.ConstructionEquipment = (() => {
     face(s, points.at(-1), "#d6dfc4", alpha);
     cylinder(
       s,
-      [x - 0.85, 0.3, z],
-      [x - 1.12, 0.02, z + 0.35],
+      [x - dir * 0.85, 0.3, z],
+      [x - dir * 1.12, 0.02, z + 0.35],
       0.065,
       "#a2ae8a",
       7,
       alpha,
     );
-    s.box(x - 0.44, -0.03, z + 0.3, 0.36, 0.08, 0.09, "#c0d293", alpha);
+    s.box(dir > 0 ? x - 0.44 : x + 0.08, -0.03, z + 0.3, 0.36, 0.08, 0.09, "#c0d293", alpha);
   }
   function dumper(s, x, z, time, alpha = 1) {
     vehicleBase(s, x, z, alpha, "#d8bd71");
@@ -364,7 +365,7 @@ window.ConstructionEquipment = (() => {
         ? parking
         : mix(parking, 5.6, smooth((t - 0.75) / 0.25));
   }
-  function pump(s, p, time, truck, alpha = 1) {
+  function pump(s, p, time, docked, alpha = 1) {
     const x = -1.35,
       z = 2.62;
     vehicleBase(s, x, z, 1, "#d2dbbf");
@@ -393,7 +394,7 @@ window.ConstructionEquipment = (() => {
         7,
       );
     cylinder(s, tip, [tip[0], level + 0.3, tip[2]], 0.024, "#303e33", 7);
-    const parked = Math.abs(truck - 1.55) < 0.08;
+    const parked = docked;
     if (parked) {
       cylinder(
         s,
@@ -410,14 +411,8 @@ window.ConstructionEquipment = (() => {
       if (p < 0.34)
         s.box(0.28, level - 0.03, -0.08, 0.62, 0.055, 0.65, "#b6bca2");
       else s.box(0.08, level - 0.03, -0.25, 1.05, 0.035, 1.0, "#aab69a");
-      cylinder(
-        s,
-        [truck - 0.97, 0.13, 2.72],
-        [truck - 1.22, -0.2, 2.28],
-        0.042,
-        "#b3b89e",
-        7,
-      );
+      // Concrete running down the mixer chute into the pump hopper (rear to rear).
+      cylinder(s, [x - 0.95, 0.06, z + 0.25], [x - 0.88, -0.12, z + 0.05], 0.03, "#b3b89e", 6);
     }
     return parked;
   }
@@ -429,7 +424,10 @@ window.ConstructionEquipment = (() => {
     const cycle = Math.min(3.999999, (p - .32) / .08 * 4), lift = Math.floor(cycle), within = cycle - lift;
     return { backfill: (lift + smooth(Math.min(1, within * 2))) / 4, lift: lift + 1, placing: within < .5, compacting: within >= .5, complete: false };
   }
+  // Machines working at progress p. The step-based fleet plan (fleet.js) is authoritative; the
+  // fallback below only applies if fleet.js is missing.
   function plan(p) {
+    if (window.FleetMotion && window.FleetMotion.plan) return window.FleetMotion.plan(p);
     return {
       roller: earthwork(p).compacting,
       excavator: p >= 0.18 && p < 0.265,
@@ -450,11 +448,14 @@ window.ConstructionEquipment = (() => {
     }
     let pouring = false,
       mixerX = null;
-    if (active.mixer) {
-      mixerX = truckX(t, 24, 1.55);
-      const a = clamp((mixerX + 5.5) / 0.7) * clamp((5.6 - mixerX) / 0.7);
-      mixer(s, mixerX, 2.65, t, a);
-      if (active.pump) pouring = pump(s, p, t, mixerX, a);
+    if (active.mixer || active.pump) {
+      // The pump stands at x -1.35 with its hopper at the rear (x ≈ -2.27). Each mixer backs up from
+      // the west to rear-to-rear, discharges, then drives forward away again — never through the pump.
+      const period = 24, q = ((t % period) + period) % period / period, dock = -3.27, start = -5.6;
+      mixerX = q < 0.25 ? mix(start, dock, smooth(q / 0.25)) : q < 0.8 ? dock : mix(dock, start, smooth((q - 0.8) / 0.2));
+      const a = clamp((mixerX - start) / 0.6);
+      mixer(s, mixerX, 2.65, t, a, -1);
+      pouring = pump(s, p, t, active.mixer && Math.abs(mixerX - dock) < 0.02, 1);
     }
     return { ...active, pouring, mixerX };
   }

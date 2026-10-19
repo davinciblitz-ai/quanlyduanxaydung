@@ -236,4 +236,38 @@ test("Lịch 5/6/7 ngày, ngày nghỉ, năm nhuận và ngày không tồn tạ
   assert.throws(() => CT.dateAt("2026-02-30", 0, [1]));
   assert.throws(() => CT.dateAt("2026-10-19", 0, []));
 });
+test("EVM mở rộng: ETC, VAC, TCPI, EAC theo ngân sách và theo CPI×SPI", () => {
+  const r = CT.schedule([{ ...task("A", 10, "", 1000), progress: 40, actualCost: 500 }]);
+  const e = CT.evm(r.rows, 5);
+  assert.equal(e.etc, 750);
+  assert.equal(e.vac, -250);
+  close(e.tcpi, 600 / 500);
+  assert.equal(e.eacBudget, 1100);
+  close(e.eacCpiSpi, 500 + 600 / 0.64);
+  assert.equal(e.percentComplete, 0.4);
+});
+test("Rút ngắn không biến công tác có thời lượng thành mốc 0 ngày", () => {
+  const o = CT.optimize([{ ...task("A", 5, "", 100), minDuration: 0, crashSlope: 10 }], 1000, 100);
+  assert.equal(Math.min(...o.scenarios.map((s) => s.duration)), 1);
+  assert.equal(o.combinations, 5);
+});
+test("Dự toán có thu nhập chịu thuế tính trước: TL = (T + C) × %", () => {
+  const e = CT.estimate([{ qty: 10, material: 50, labor: 30, machine: 20 }], { overhead: 6.5, contingency: 5, vat: 8, other: 0, profit: 6 });
+  close(e.overhead, 65);
+  close(e.profit, (1000 + 65) * 0.06);
+  close(e.total, (1000 + 65 + 63.9) * 1.05 * 1.08);
+  assert.equal(CT.estimate([], { overhead: 0, contingency: 0, vat: 0, other: 0 }).profit, 0);
+});
+test("Hoàn vốn có chiết khấu và chỉ số sinh lời PI", () => {
+  const a = CT.appraisal([-1000, 600, 600], 10);
+  close(a.payback, 1 + 400 / 600);
+  const pv1 = 600 / 1.1, pv2 = 600 / 1.21;
+  close(a.discountedPayback, 1 + (1000 - pv1) / pv2);
+  close(a.pi, (pv1 + pv2) / 1000);
+});
+test("Lịch có ngày nghỉ lễ: bỏ qua ngày lễ và kiểm tra định dạng", () => {
+  assert.equal(CT.dateAt("2026-04-29", 1, [1, 2, 3, 4, 5, 6], ["2026-04-30", "2026-05-01"]), "2026-05-02");
+  assert.equal(CT.dateAt("2026-04-30", 0, [1, 2, 3, 4, 5, 6], ["2026-04-30", "2026-05-01"]), "2026-05-02");
+  assert.throws(() => CT.dateAt("2026-04-29", 1, [1], ["30/04/2026"]));
+});
 console.log(`\n${count} nhóm kiểm thử đạt.`);

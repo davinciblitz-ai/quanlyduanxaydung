@@ -19,6 +19,29 @@
       maximumFractionDigits: d,
       minimumFractionDigits: d,
     });
+  // Số có tối đa d chữ số thập phân, không ép số 0 thừa (6,5 % thay vì 7 %).
+  const num = (v, d = 2) =>
+    Number(v).toLocaleString("vi-VN", { maximumFractionDigits: d });
+  const pct = (v) => num(v, 2) + "%";
+  /**
+   * Đọc số theo thói quen Việt Nam: "1.500.000", "1.500" (nghìn), "2,5", "-1.250,75".
+   * Một dấu chấm theo sau đúng 3 chữ số được hiểu là phân cách hàng nghìn.
+   */
+  function parseNumberVN(input) {
+    let s = String(input ?? "").trim().replace(/[\s₫đ]|VND|USD/gi, "");
+    if (!s) return NaN;
+    const sign = /^[-−]/.test(s) ? -1 : 1;
+    s = s.replace(/^[-−+]/, "");
+    if (!/^[\d.,]+$/.test(s)) return NaN;
+    const dots = (s.match(/\./g) || []).length, commas = (s.match(/,/g) || []).length;
+    if (dots && commas) {
+      // Dấu xuất hiện sau cùng là dấu thập phân.
+      s = s.lastIndexOf(",") > s.lastIndexOf(".") ? s.replace(/\./g, "").replace(",", ".") : s.replace(/,/g, "");
+    } else if (commas) s = commas > 1 ? s.replace(/,/g, "") : s.replace(",", ".");
+    else if (dots > 1 || /^\d{1,3}\.\d{3}$/.test(s)) s = s.replace(/\./g, "");
+    if (!/^(\d+\.?\d*|\.\d+)$/.test(s)) return NaN;
+    return sign * Number(s);
+  }
   const money = (v, c = project()?.currency || "VND") =>
     fmt(v, c === "USD" ? 2 : 0) + " " + (c === "VND" ? "₫" : c);
   const shortMoney = (v, c = project()?.currency || "VND") =>
@@ -35,21 +58,50 @@
   const KEY = "nen.workspace.v1";
   let storageOK = true,
     db;
+  /** Bổ sung trường còn thiếu cho dữ liệu cũ hoặc nhập từ JSON để giao diện không vỡ. */
+  function normalizeProject(p) {
+    if (!p || typeof p !== "object") return p;
+    const base = Samples.empty();
+    for (const key of ["tasks", "boq", "risks", "history"]) if (!Array.isArray(p[key])) p[key] = [];
+    if (!Array.isArray(p.workdays) || !p.workdays.length) p.workdays = base.workdays;
+    if (!Array.isArray(p.holidays)) p.holidays = [];
+    p.estimate = { ...base.estimate, profit: 0, ...(p.estimate || {}) };
+    p.finance = { ...base.finance, ...(p.finance || {}) };
+    for (const key of ["statusDay", "capacity", "indirectBase", "dailySaving"])
+      if (typeof p[key] !== "number") p[key] = base[key];
+    return p;
+  }
+  function loadWorkspace(raw) {
+    const data = JSON.parse(raw || "null");
+    if (!data || data.schema !== 1 || !Array.isArray(data.projects) || !data.projects.length) return null;
+    data.projects = data.projects.filter((p) => p && typeof p === "object").map(normalizeProject);
+    return data.projects.length ? data : null;
+  }
+  let stored = null;
   try {
-    db = JSON.parse(localStorage.getItem(KEY) || "null");
+    stored = localStorage.getItem(KEY);
   } catch {
     storageOK = false;
   }
-  if (
-    !db ||
-    db.schema !== 1 ||
-    !Array.isArray(db.projects) ||
-    !db.projects.length
-  ) {
+  try {
+    db = loadWorkspace(stored);
+  } catch {
+    db = null;
+  }
+  if (!db) {
+    // Giữ bản hỏng để có thể khôi phục thủ công thay vì ghi đè mất dữ liệu.
+    if (stored) {
+      try {
+        localStorage.setItem(KEY + ".backup-" + Date.now(), stored);
+      } catch {}
+    }
     db = { schema: 1, projects: [Samples.construction()], selected: null };
     db.selected = db.projects[0].id;
   }
-  if(!db.projects.some(p=>p.id==='nhom-quan-ly-du-an')&&!db.deletedSamples?.includes('nhom-quan-ly-du-an'))db.projects.push(Samples.group());
+  if (!db.projects.some((p) => p.id === db.selected)) db.selected = db.projects[0].id;
+  // Bài tập từ Dữ liệu QLDA.docx luôn có sẵn (trừ khi người dùng đã xóa).
+  for (const [id, make] of [['nhom-quan-ly-du-an', Samples.group], ['bai-tap-a-k', Samples.exerciseAK]])
+    if (!db.projects.some((p) => p.id === id) && !db.deletedSamples?.includes(id)) db.projects.push(make());
   let mode = null,
     page = "overview",
     scheduleTab = "gantt",
@@ -176,7 +228,7 @@
       items
         .map(
           (k) =>
-            `<button data-page="${k}" class="${page === k ? "active" : ""}">${icon(k)}<span>${names[k]}</span></button>`,
+            `<button data-page="${k}" class="${page === k ? "active" : ""}" ${page === k ? 'aria-current="page"' : ""}>${icon(k)}<span>${names[k]}</span></button>`,
         )
         .join(""),
     );
@@ -203,11 +255,25 @@
       : storageOK
         ? "Lưu trên trình duyệt"
         : "Chưa lưu · hãy xuất JSON";
+    const avatar = $(".topbar-actions .avatar, button.avatar");
+    if (avatar) {
+      // Chữ viết tắt của tài khoản đang đăng nhập; chế độ cá nhân hiện "CN".
+      const words = (team?.name || "").trim().split(/\s+/).filter(Boolean);
+      avatar.textContent = words.length ? (words.length > 1 ? words[0][0] + words[words.length - 1][0] : words[0].slice(0, 2)).toUpperCase() : "CN";
+      avatar.title = team ? "Tài khoản: " + team.name : "Chế độ cá nhân · bấm để kết nối đội dự án";
+    }
     $("#footer-calendar").textContent =
       `Lịch ${project().workdays.length} ngày/tuần · Thời lượng & lag theo ngày làm việc`;
   }
+  let sessionUser = null;
   function chooseMode(value) {
     mode = value;
+    // Còn phiên đăng nhập đội dự án: vào thẳng dữ liệu máy chủ thay vì âm thầm sửa bản cục bộ.
+    if (value === "business" && sessionUser && !team) {
+      const user = sessionUser;
+      sessionUser = null;
+      loadTeam(user).then(() => toast("Đã khôi phục phiên đăng nhập của " + user.name)).catch((e) => toast(e.message, true));
+    }
     page = value === "business" ? "portfolio" : "overview";
     $("#landing").hidden = true;
     $("#app").hidden = false;
@@ -240,7 +306,7 @@
     if (document.startViewTransition) {
       routeTransition?.skipTransition();
       routeTransition = document.startViewTransition(change);
-      routeTransition.finished.catch(() => {});
+      for (const promise of [routeTransition.ready, routeTransition.finished, routeTransition.updateCallbackDone]) promise?.catch(() => {});
     } else {
       change();
       window.Motion?.animate(
@@ -313,10 +379,15 @@
     '<div class="legend"><span><i class="red"></i>Công việc găng</span><span><i></i>Công việc thường</span><span><i class="dash"></i>Dự trữ toàn phần</span></div>';
   const primaryAdd = () =>
     '<button class="btn primary" data-action="add-task">+ Thêm công việc</button>';
+  /** Ngày lịch của mốc ngày làm việc (mốc 0 = đầu ngày khởi công), có trừ ngày lễ. */
+  const workDate = (p, offset) => CT.dateAt(p.start, Math.max(0, offset), p.workdays, p.holidays);
   function finishDate(p, r) {
-    return dateLabel(
-      CT.dateAt(p.start, Math.max(0, r.duration - 1), p.workdays),
-    );
+    return dateLabel(workDate(p, r.duration - 1));
+  }
+  /** Khoảng ngày thực hiện của công tác: từ ngày ES đến ngày làm việc cuối (EF − 1). */
+  function taskDates(p, t) {
+    const start = workDate(p, t.es);
+    return t.duration > 1 ? dateLabel(start) + " – " + dateLabel(workDate(p, t.ef - 1)) : dateLabel(start);
   }
   function overviewView() {
     const p = project(),
@@ -331,14 +402,14 @@
       over = resourceDays(r).filter((x) => x.people > p.capacity).length;
     return (
       heading(
-        "Mỗi công việc, một bước tiến.",
-        "Theo dõi công trình từ bức tranh tổng thể đến từng đầu việc.",
+        "Tổng quan dự án",
+        "Thời gian, đường găng, chi phí và rủi ro của công trình ở một nơi.",
         `<button class="btn ghost" data-action="export">↓ Xuất dữ liệu</button>${primaryAdd()}`,
       ) +
       `<div class="plan-flow"><span>01 · Nhập ${p.tasks.length} công tác</span><span>02 · Chọn cách xếp</span><span>03 · Đường găng & chi phí</span><button class="btn primary small" data-schedule-tab="planner">Nhập xong · Chọn cách xếp ↗</button></div>` +
       `<div class="kpi-grid">${kpi("Thời gian dự án", r.duration, "Hoàn thành dự kiến " + finishDate(p, r), "accent", "ngày")}${kpi("Công việc găng", r.critical.length, "Trong tổng số " + p.tasks.length + " công việc", "danger")}${kpi("Ngân sách công việc", shortMoney(e.bac), "Chi phí thực tế: " + shortMoney(e.ac))}${kpi("Khối lượng hoàn thành", fmt(progress, 1), "Theo trọng số ngân sách công việc", "", "%")}</div>` +
-      `<div class="grid-two">${panel("Tiến độ tổng thể", "Kế hoạch sớm nhất · bấm thanh để sửa công việc", `<div class="table-scroll">${gantt(r, true)}</div><div class="data-note">${legend()}</div>`, `<button class="text-link" data-page="schedule">Xem chi tiết ↗</button>`)}${panel("Cần bạn chú ý", "Các tín hiệu từ dữ liệu hiện tại", `<div class="panel-body"><div class="notice"><i class="notice-dot"></i><div><strong>${r.critical.length} công việc có dự trữ bằng 0</strong><p>${r.critical.length ? r.critical.map(escape).join(" · ") : "Thêm công việc để tính đường găng."}</p></div></div><div class="notice"><i class="notice-dot"></i><div><strong>${over ? over + " ngày vượt năng lực nhân công" : "Nhân công trong giới hạn đã đặt"}</strong><p>Năng lực ${fmt(p.capacity)} người/ngày. Chọn Xếp & tối ưu để tìm lịch theo năng lực.</p></div></div><div class="notice"><i class="notice-dot"></i><div><strong>${p.risks.filter((x) => x.probability * x.impact >= 15 && x.status !== "Đã đóng").length} rủi ro cần ưu tiên</strong><p>Đánh giá theo xác suất × tác động, thang điểm 1–5.</p></div></div><button class="btn ghost small" data-page="model">Xem công trình theo thời gian ↗</button></div>`)}</div>` +
-      `<div class="grid-two equal-columns">${panel("Kiểm soát tiến độ & chi phí", "Báo cáo tại cuối ngày làm việc thứ " + p.statusDay, `<div class="panel-body"><div class="split-info"><div><p class="muted">Chỉ số tiến độ SPI</p><div class="info-number">${e.spi === null ? "—" : fmt(e.spi, 2)}</div></div><div><p class="muted">Chỉ số chi phí CPI</p><div class="info-number">${e.cpi === null ? "—" : fmt(e.cpi, 2)}</div></div><button class="text-link" data-page="costs">Phân tích EVM ↗</button></div><p class="form-caption">PV phân bổ tuyến tính theo thời lượng. Cập nhật % hoàn thành và chi phí thực tế của công việc để đọc các chỉ số.</p></div>`)}${panel("Nhật ký thay đổi gần đây", "Theo dõi các quyết định của dự án", historyHTML(p.history.slice(0, 3)), `<button class="text-link" data-page="team">Xem tất cả ↗</button>`)}</div>`
+      `<div class="grid-two">${panel("Tiến độ tổng thể", "Kế hoạch sớm nhất · bấm thanh để sửa công việc", `<div class="table-scroll">${gantt(r, true)}</div><div class="data-note">${legend()}</div>`, `<button class="text-link" data-page="schedule">Xem chi tiết ↗</button>`)}${panel("Cần bạn chú ý", "Các tín hiệu từ dữ liệu hiện tại", `<div class="panel-body"><div class="notice"><i class="notice-dot"></i><div><strong>${r.critical.length} công việc có dự trữ bằng 0</strong><p>${r.critical.length ? r.critical.map(escape).join(" · ") : "Thêm công việc để tính đường găng."}</p></div></div><div class="notice"><i class="notice-dot"></i><div><strong>${over ? over + " ngày vượt năng lực nhân công" : "Nhân công trong giới hạn đã đặt"}</strong><p>Năng lực ${fmt(p.capacity)} người/ngày. Chọn Xếp & tối ưu để tìm lịch theo năng lực.</p></div></div><div class="notice"><i class="notice-dot"></i><div><strong>${p.risks.filter((x) => x.probability * x.impact >= 15 && x.status !== "Đã đóng").length} rủi ro cần ưu tiên</strong><p>Điểm = xác suất × tác động (mỗi trục 1–5, tối đa 25); ưu tiên khi ≥ 15.</p></div></div><button class="btn ghost small" data-page="model">Xem công trình theo thời gian ↗</button></div>`)}</div>` +
+      `<div class="grid-two equal-columns">${panel("Kiểm soát tiến độ & chi phí", "Báo cáo tại cuối ngày làm việc thứ " + p.statusDay + (p.statusDay > 0 ? " · " + dateLabel(workDate(p, p.statusDay - 1)) : ""), `<div class="panel-body"><div class="split-info"><div><p class="muted">Chỉ số tiến độ SPI</p><div class="info-number">${e.spi === null ? "—" : fmt(e.spi, 2)}</div></div><div><p class="muted">Chỉ số chi phí CPI</p><div class="info-number">${e.cpi === null ? "—" : fmt(e.cpi, 2)}</div></div><button class="text-link" data-page="costs">Phân tích EVM ↗</button></div><p class="form-caption">PV phân bổ tuyến tính theo thời lượng. Cập nhật % hoàn thành và chi phí thực tế của công việc để đọc các chỉ số.</p></div>`)}${panel("Nhật ký thay đổi gần đây", "Theo dõi các quyết định của dự án", historyHTML(p.history.slice(0, 3)), `<button class="text-link" data-page="team">Xem tất cả ↗</button>`)}</div>`
     );
   }
   function portfolioView() {
@@ -347,7 +418,7 @@
       total = ps.reduce((s, p) => s + p.tasks.length, 0);
     return (
       heading(
-        "Một góc nhìn. Nhiều công trình.",
+        "Danh mục dự án",
         "Quản lý danh mục dự án và đi sâu vào công trình cần bạn chú ý.",
         `<button class="btn ghost" data-action="team-connect">⌘ ${team ? "Tài khoản" : "Kết nối đội dự án"}</button><button class="btn primary" data-action="new-project">+ Tạo dự án</button>`,
       ) +
@@ -363,7 +434,7 @@
       `<div class="project-cards">${all
         .map(
           ({ p, r }) =>
-            `<button class="project-card" data-open-project="${escape(p.id)}"><div class="project-art">${p.currency === "USD" ? "BÀI MẪU KIỂM CHỨNG" : "DỰ ÁN XÂY DỰNG"}<p class="member-count">${new Set(p.tasks.map((t) => t.owner).filter(Boolean)).size} người phụ trách</p></div><div class="project-card-body"><span class="badge ${r.critical.length ? "warning" : "neutral"}">${r.critical.length} công việc găng</span><h3>${escape(p.name)}</h3><div class="project-card-meta"><span>${r.duration} ngày làm việc</span><span>${shortMoney(
+            `<button class="project-card" data-open-project="${escape(p.id)}"><div class="project-art">DỰ ÁN XÂY DỰNG · ${escape(p.currency)}<p class="member-count">${new Set(p.tasks.map((t) => t.owner).filter(Boolean)).size} người phụ trách</p></div><div class="project-card-body"><span class="badge ${r.critical.length ? "warning" : "neutral"}">${r.critical.length} công việc găng</span><h3>${escape(p.name)}</h3><div class="project-card-meta"><span>${r.duration} ngày làm việc</span><span>${shortMoney(
               p.tasks.reduce((s, t) => s + t.cost, 0),
               p.currency,
             )}</span></div></div></button>`,
@@ -382,17 +453,31 @@
       );
     const p = project(),
       total = Math.max(1, r.duration),
-      display = compact ? r.rows.slice(0, 7) : filteredRows(r.rows),
-      step = 1,
-      den = total + Math.max(1, step / 2),
-      grid = (step / den) * 100,
+      limit = 10,
+      display = compact ? r.rows.slice(0, limit) : filteredRows(r.rows),
+      { day, step } = ganttScale(total),
+      den = total + 0.5,
+      at = (v) => (v / den) * 100,
       ticks = [];
-    for (let i = 0; i <= Math.min(total,120); i += step)
-      ticks.push(
-        `<span class="gantt-tick" style="left:${(i / den) * 100}%">${i}</span>`,
-      );
+    for (let i = 0; i <= total; i += step)
+      ticks.push(`<span class="gantt-tick" style="left:${at(i)}%">${i}</span>`);
     const baseline = new Map((p.baseline?.rows || []).map((t) => [t.id, t]));
-    return `<div class="gantt" data-gantt-days="${total}" data-gantt-den="${den}" style="--grid:${grid}%;min-width:calc(var(--gantt-label-width,260px) + ${den*28}px)"><div class="gantt-header"><div class="gantt-label">CÔNG VIỆC / NGÀY LÀM VIỆC</div><div class="gantt-track">${ticks.join("")}</div></div>${display.map((t) => `<div class="gantt-row"><button class="gantt-label" data-edit-task="${escape(t.id)}"><small>${escape(t.id)}</small>${escape(t.name)}</button><div class="gantt-track">${t.tf ? `<div class="gantt-float" style="left:${(t.ef / den) * 100}%;width:${(t.tf / den) * 100}%" title="Dự trữ toàn phần ${t.tf} ngày"></div>` : ""}${baseline.has(t.id) ? `<div class="baseline-bar" style="left:${(baseline.get(t.id).es / den) * 100}%;width:${Math.max(0.2, ((baseline.get(t.id).ef - baseline.get(t.id).es) / den) * 100)}%"></div>` : ""}<button class="gantt-bar ${t.critical ? "critical" : ""}" data-edit-task="${escape(t.id)}" style="left:${(t.es / den) * 100}%;width:${Math.max(0.35, (t.duration / den) * 100)}%" title="${escape(t.name)} · ES ${t.es} → EF ${t.ef} · TF ${t.tf}"><span class="bar-progress" style="width:${t.progress}%"></span><span>${t.duration === 0 ? "◆" : t.duration + "n"}</span></button>${p.statusDay <= total ? `<i class="gantt-status" style="left:${(p.statusDay / den) * 100}%"></i>` : ""}</div></div>`).join("")}</div>`;
+    const status = p.statusDay <= total ? `<i class="gantt-status" style="left:${at(p.statusDay)}%"></i>` : "";
+    const rows = display.map((t) => {
+      const id = escape(t.id), dates = taskDates(p, t), base = baseline.get(t.id);
+      const float = t.tf > 0 ? `<div class="gantt-float" style="left:${at(t.ef)}%;width:${at(t.tf)}%" title="Dự trữ toàn phần ${t.tf} ngày"></div>` : "";
+      const planned = base ? `<div class="baseline-bar" style="left:${at(base.es)}%;width:${Math.max(0.2, at(base.ef - base.es))}%" title="Kế hoạch gốc ${base.es} → ${base.ef}"></div>` : "";
+      const info = `${t.name} · ${dates} · ES ${t.es} → EF ${t.ef} · TF ${t.tf}${t.progress ? " · hoàn thành " + num(t.progress, 1) + "%" : ""}`;
+      return `<div class="gantt-row${t.critical ? " is-critical" : ""}"><button class="gantt-label" data-edit-task="${id}" title="${escape(t.name)}"><small>${id}</small><span>${escape(t.name)}</span></button><div class="gantt-track">${float}${planned}<button class="gantt-bar ${t.critical ? "critical" : ""}${t.duration === 0 ? " milestone" : ""}" data-edit-task="${id}" style="left:${at(t.es)}%;width:${t.duration ? Math.max(0.35, at(t.duration)) : 0}%" title="${escape(info)}" aria-label="${escape(info)}"><span class="bar-progress" style="width:${Math.min(100, t.progress)}%"></span><span>${t.duration === 0 ? "◆" : t.duration + "n"}</span></button>${status}</div></div>`;
+    });
+    const more = compact && r.rows.length > limit ? `<div class="gantt-more"><button class="text-link" data-page="schedule">+ ${r.rows.length - limit} công việc khác · xem toàn bộ Gantt</button></div>` : "";
+    return `<div class="gantt" style="--grid:${at(day >= 12 ? 1 : step)}%;--day:${day}px;min-width:calc(var(--gantt-label-width,260px) + ${Math.ceil(den * day)}px)"><div class="gantt-header"><div class="gantt-label">CÔNG VIỆC · NGÀY LÀM VIỆC →</div><div class="gantt-track">${ticks.join("")}</div></div>${rows.join("")}</div>${more}`;
+  }
+  /** Bề rộng 1 ngày trên Gantt theo độ dài tiến độ: vừa màn hình, nhãn trục không chồng nhau. */
+  function ganttScale(total) {
+    const day = total <= 30 ? 28 : total <= 60 ? 15 : total <= 120 ? 9 : total <= 300 ? 5 : 3;
+    const step = [1, 2, 5, 10, 20, 50, 100, 200, 500].find((s) => s * day >= 28) || 1000;
+    return { day, step };
   }
   function filteredRows(rows) {
     return rows.filter(
@@ -430,17 +515,44 @@
   function planningView() {
     const p=project(),d=planningDraft(),o=d.options,active=calc(),selected=p.planning?.selected?.fingerprint===d.fingerprint;
     const manual=o.strategy==='manual',algorithm=o.strategy==='algorithm';
-    const config=`<form id="planner-config" data-form="planning"><fieldset class="plan-fieldset"><legend>1. Bạn muốn giải theo hướng nào?</legend><div class="plan-goals">${planningChoice('planGoal','analyze','Giải toàn bộ dự án','Tiến độ, sơ đồ mạng, đường găng, nhân công và chi phí.',o.goal==='analyze')}${planningChoice('planGoal','optimize','Tối ưu nguồn lực & chi phí','So sánh phương án theo đỉnh nhân lực, độ đều và tổng chi phí.',o.goal==='optimize')}</div></fieldset><fieldset class="plan-fieldset"><legend>2. Chọn cách xếp sau khi nhập công tác</legend><div class="plan-methods">${planningChoice('planStrategy','manual','01 · Tự xếp tay','Tự nhập ngày bắt đầu; hệ thống kiểm tra quan hệ và năng lực.',manual)}${planningChoice('planStrategy','basic','02 · Xếp cơ bản','Đặt công việc ở thời điểm sớm nhất theo FS / SS / FF / SF.',o.strategy==='basic')}${planningChoice('planStrategy','algorithm','03 · Xếp bằng thuật toán','Tìm lịch thỏa năng lực, giảm thung lũng và chi phí.',algorithm)}</div></fieldset><div class="plan-settings"><div class="form-grid">${field('planCapacity','Năng lực tối đa (người/ngày)',o.capacity,'number','min="0" max="100000" step="1"')}${field('planDeadline','Hoàn thành chậm nhất tại mốc (ngày)',o.maxDuration,'number','min="0" max="100000" step="1"')}${field('planIndirect','Gián tiếp mỗi ngày công trường · '+escape(p.currency),o.indirectPerDay,'number','min="0" max="1000000000000000" step="any"')}${field('planMobilization','Chi phí huy động / người / lần · '+escape(p.currency),o.mobilizationRate,'number','min="0" max="1000000000000000" step="any"')}${selectField('planPriority','Ưu tiên khi dùng thuật toán',o.priority,[['balanced','Cân bằng nhân công và chi phí'],['workforce','Biểu đồ tăng → đỉnh → giảm'],['cost','Ưu tiên tổng chi phí']])}<label class="plan-checkbox"><input type="checkbox" name="nen_planCrash" ${o.allowCrash?'checked':''}>Thử rút ngắn công tác trong giới hạn đã nhập</label></div><p class="form-caption">Mốc 0 là đầu ngày khởi công. Chi phí trực tiếp đã gồm nhân công; chỉ cộng gián tiếp/ngày và huy động theo đơn giá bạn nhập. Cài đặt này dùng để so sánh phương án, tách khỏi máy tính lãi vay.</p></div>${manual?`<div class="plan-manual"><div class="panel-head"><div><h3>Tự xếp mốc bắt đầu</h3><p>Nhập số hoặc dùng − / + để dịch từng công tác; kiểm tra trước khi áp dụng.</p></div><button type="button" class="btn ghost small" data-action="manual-earliest">Điền theo CPM</button></div><div class="table-scroll"><table><thead><tr><th>Công tác</th><th>Quan hệ</th><th>Thời lượng</th><th>Bắt đầu tại mốc</th><th>Nhân công</th></tr></thead><tbody>${p.tasks.map(t=>`<tr><td class="task-name"><span class="code">${escape(t.id)}</span>${escape(t.name)}</td><td>${escape(CT.depText(t.deps))||'—'}</td><td>${t.duration} ngày</td><td><div class="manual-stepper"><button type="button" data-manual-shift="${escape(t.id)}" data-delta="-1" aria-label="Dời ${escape(t.id)} sớm 1 ngày">−</button><input type="number" data-manual-start="${escape(t.id)}" value="${Number.isFinite(d.manual[t.id])?d.manual[t.id]:''}" min="0" max="100000" step="1" required aria-label="Mốc bắt đầu ${escape(t.id)}"><button type="button" data-manual-shift="${escape(t.id)}" data-delta="1" aria-label="Dời ${escape(t.id)} muộn 1 ngày">+</button></div></td><td>${t.workers}</td></tr>`).join('')}</tbody></table></div></div>`:''}<div class="plan-submit"><span>${p.tasks.length} công tác · <strong>Cách nào cũng có đường găng và chi phí</strong></span><button type="submit" class="btn primary" ${d.busy?'disabled':''}>${d.busy?'Đang tìm phương án…':manual?'Kiểm tra lịch xếp tay':algorithm?'Tìm phương án tối ưu ↗':'Giải tiến độ cơ bản ↗'}</button>${d.busy?'<button type="button" class="btn ghost" data-action="cancel-planning">Dừng tìm kiếm</button>':''}</div><p id="planner-live" class="form-caption" aria-live="polite">${d.busy?'Thuật toán chạy riêng để bạn vẫn có thể thao tác.':d.error?escape(d.error):''}</p></form>`;
+    const config=`<form id="planner-config" data-form="planning"><fieldset class="plan-fieldset"><legend>1. Bạn muốn giải theo hướng nào?</legend><div class="plan-goals">${planningChoice('planGoal','analyze','Giải toàn bộ dự án','Tiến độ, đường găng, nhân công và chi phí. Thuật toán tìm lịch ngắn nhất thỏa năng lực.',o.goal==='analyze')}${planningChoice('planGoal','optimize','Tối ưu nguồn lực & chi phí','Điều hòa biểu đồ nhân lực (K1, K2) hoặc giảm tổng chi phí trong hạn hoàn thành.',o.goal==='optimize')}</div></fieldset><fieldset class="plan-fieldset"><legend>2. Chọn cách xếp sau khi nhập công tác</legend><div class="plan-methods">${planningChoice('planStrategy','manual','01 · Tự xếp tay','Tự nhập ngày bắt đầu; hệ thống kiểm tra quan hệ và năng lực.',manual)}${planningChoice('planStrategy','basic','02 · Xếp cơ bản','Đặt công việc ở thời điểm sớm nhất theo FS / SS / FF / SF.',o.strategy==='basic')}${planningChoice('planStrategy','algorithm','03 · Xếp bằng thuật toán','Bài nhỏ duyệt đầy đủ (chứng minh tối ưu); bài lớn tìm kiếm có cận dưới để so sánh.',algorithm)}</div></fieldset><div class="plan-settings"><div class="form-grid">${field('planCapacity','Năng lực tối đa (người/ngày)',o.capacity,'number','min="0" max="100000" step="1"')}${field('planDeadline','Hoàn thành chậm nhất tại mốc (ngày)',o.maxDuration,'number','min="0" max="100000" step="1"')}${field('planIndirect','Gián tiếp mỗi ngày công trường · '+escape(p.currency),o.indirectPerDay,'number','min="0" max="1000000000000000" step="any"')}${field('planMobilization','Chi phí huy động / người / lần · '+escape(p.currency),o.mobilizationRate,'number','min="0" max="1000000000000000" step="any"')}${o.goal==='optimize'?selectField('planPriority','Mục tiêu tối ưu',o.priority,[['workforce','Điều hòa nhân lực · đỉnh thấp, biểu đồ đều (K1, K2)'],['cost','Tổng chi phí thấp nhất · trực tiếp + gián tiếp + huy động']]):`<div class="field"><label>Mục tiêu của thuật toán</label><p class="plan-objective-note">Lịch <strong>ngắn nhất</strong> không vượt năng lực; hòa thì chọn đỉnh nhân lực thấp hơn.</p><input type="hidden" name="nen_planPriority" value="${escape(o.priority)}"></div>`}<label class="plan-checkbox"><input type="checkbox" name="nen_planCrash" ${o.allowCrash?'checked':''}>Thử rút ngắn công tác trong giới hạn đã nhập</label></div><p class="form-caption">Mốc 0 là đầu ngày khởi công. Chi phí trực tiếp đã gồm nhân công; chỉ cộng gián tiếp/ngày và huy động theo đơn giá bạn nhập. Cài đặt này dùng để so sánh phương án, tách khỏi máy tính lãi vay.</p></div>${manual?`<div class="plan-manual"><div class="panel-head"><div><h3>Tự xếp mốc bắt đầu</h3><p>Nhập số hoặc dùng − / + để dịch từng công tác; kiểm tra trước khi áp dụng.</p></div><button type="button" class="btn ghost small" data-action="manual-earliest">Điền theo CPM</button></div><div class="table-scroll"><table><thead><tr><th>Công tác</th><th>Quan hệ</th><th>Thời lượng</th><th>Bắt đầu tại mốc</th><th>Nhân công</th></tr></thead><tbody>${p.tasks.map(t=>`<tr><td class="task-name"><span class="code">${escape(t.id)}</span>${escape(t.name)}</td><td>${escape(CT.depText(t.deps))||'—'}</td><td>${t.duration} ngày</td><td><div class="manual-stepper"><button type="button" data-manual-shift="${escape(t.id)}" data-delta="-1" aria-label="Dời ${escape(t.id)} sớm 1 ngày">−</button><input type="number" data-manual-start="${escape(t.id)}" value="${Number.isFinite(d.manual[t.id])?d.manual[t.id]:''}" min="0" max="100000" step="1" required aria-label="Mốc bắt đầu ${escape(t.id)}"><button type="button" data-manual-shift="${escape(t.id)}" data-delta="1" aria-label="Dời ${escape(t.id)} muộn 1 ngày">+</button></div></td><td>${t.workers}</td></tr>`).join('')}</tbody></table></div></div>`:''}<div class="plan-submit"><span>${p.tasks.length} công tác · <strong>Cách nào cũng có đường găng và chi phí</strong></span><button type="submit" class="btn primary" ${d.busy?'disabled':''}>${d.busy?'Đang tìm phương án…':manual?'Kiểm tra lịch xếp tay':algorithm?'Tìm phương án tối ưu ↗':'Giải tiến độ cơ bản ↗'}</button>${d.busy?'<button type="button" class="btn ghost" data-action="cancel-planning">Dừng tìm kiếm</button>':''}</div><p id="planner-live" class="form-caption" aria-live="polite">${d.busy?'Thuật toán chạy riêng để bạn vẫn có thể thao tác.':d.error?escape(d.error):''}</p></form>`;
     return `<div class="plan-current"><span>${selected?'Phương án đang áp dụng: '+({manual:'Xếp tay',basic:'CPM cơ bản',algorithm:'Thuật toán'}[p.planning.strategy]):'Đang hiển thị lịch CPM sớm nhất'}</span><strong>${active.duration} ngày · ${active.critical.length} công tác găng</strong>${selected?'<button class="text-link" data-action="clear-planning">Về lịch CPM gốc</button>':''}</div><section class="panel planning-panel"><div class="panel-head"><div><h2>Chọn cách giải & xếp công việc</h2><p>Nhập xong công tác, chọn một cách xếp và xem trước trước khi áp dụng.</p></div><button class="text-link" data-schedule-tab="tasks">Sửa dữ liệu đầu vào</button></div><div class="panel-body">${config}</div></section>${d.report?planningReportView(d):'<div class="callout">Lịch cơ bản có thể vượt năng lực. Lịch thuật toán chỉ nhận phương án thỏa giới hạn. Nếu công nghệ buộc nhân lực tăng giảm nhiều lần, kết quả sẽ ghi rõ mức biến động còn lại.</div>'}`;
   }
   function planningReportView(d) {
-    const report=d.report,plan=chosenPlanning(d),o=report.options;
-    if(!plan)return `<section class="panel"><div class="panel-body"><h2>Chưa tìm được phương án thỏa điều kiện</h2><p>${escape(report.reason||'Kiểm tra dữ liệu đầu vào.')}</p><p class="form-caption">Có thể tăng hạn hoàn thành, tăng năng lực hoặc điều chỉnh nguồn lực công tác rồi thử lại. ${report.method==='infeasible'?'Một công tác đã vượt năng lực, không thể sửa chỉ bằng dịch lịch.':'Kết quả tìm kiếm có giới hạn không phải bằng chứng vô nghiệm.'}</p></div></section>`;
-    if(!plan.metrics)return `<div class="callout plan-errors" role="alert">${plan.issues.map(i=>escape(i.message)).join('<br>')}</div>`;
-    const tasks=Planner.effective(project().tasks,plan.durations),schedule=Planner.result(tasks,plan),m=plan.metrics,b=report.basic.metrics,c=plan.costs;
-    const proof=report.method==='exhaustive'?'Đã duyệt đầy đủ trong phạm vi ngày và thời lượng đã chọn':report.method==='heuristic'?'Phương án tốt nhất tìm được · tìm kiếm có giới hạn':o.strategy==='manual'?'Giữ nguyên mốc bắt đầu bạn nhập':'Lịch sớm nhất theo quan hệ công việc';
-    const allowApply=plan.valid||o.strategy==='basic'&&!plan.issues.some(i=>['start','relation'].includes(i.kind));
-    return `<section class="panel planning-result"><div class="panel-head"><div><p class="eyebrow">KẾT QUẢ XẾP LỊCH · ${escape(proof)}</p><h2>${m.duration} ngày · ${money(c.total)}</h2><p>${report.evaluated} phương án đã đánh giá${report.elapsedMs!==undefined?' · '+fmt(report.elapsedMs/1000,1)+' giây':''}. ${m.unimodal?'Biểu đồ không có thung lũng tăng lại sau khi giảm.':'Còn biến động nhân lực; xem mức tăng/giảm và các ràng buộc bên dưới.'}</p></div><div class="panel-tools"><button class="btn ghost small" data-action="planning-csv">Xuất CSV</button><button class="btn ghost small" data-action="planning-report">Xuất báo cáo</button><button class="btn primary small" data-action="apply-planning" ${!allowApply?'disabled':''}>Áp dụng phương án</button></div></div>${plan.issues.length?`<div class="callout plan-errors" role="alert">${plan.issues.map(i=>escape(i.message)).join('<br>')}${o.strategy==='basic'?'<br>Lịch cơ bản phản ánh quan hệ; áp dụng lịch này vẫn giữ các cảnh báo vượt nguồn lực.':''}</div>`:''}<div class="plan-comparison table-scroll"><table><thead><tr><th>Chỉ tiêu</th><th>CPM cơ bản</th><th>Phương án đang xem</th></tr></thead><tbody>${[['Thời gian',b.duration+' ngày',m.duration+' ngày'],['Đỉnh nhân công',fmt(b.peak)+' người',fmt(m.peak)+' người'],['Thung lũng nhân lực',fmt(b.valley),fmt(m.valley)],['Tổng công',fmt(b.work),fmt(m.work)],['Lượt huy động người',fmt(b.mobilizations),fmt(m.mobilizations)],['Ngày vượt năng lực',b.overDays,m.overDays],['Chi phí trực tiếp',money(report.basic.costs.direct),money(c.direct)],['Gián tiếp theo ngày',money(report.basic.costs.indirect),money(c.indirect)],['Huy động nhân công',money(report.basic.costs.mobilization),money(c.mobilization)],['Tổng chi phí so sánh',money(report.basic.costs.total),money(c.total)]].map(x=>`<tr><th>${x[0]}</th><td class="num">${x[1]}</td><td class="num"><strong>${x[2]}</strong></td></tr>`).join('')}</tbody></table></div><div class="panel-body"><div class="plan-charts"><div><h3>Trước · CPM cơ bản</h3>${resourceChart(report.basic.crew.map((people,day)=>({people,day})),o.capacity)}</div><div><h3>Sau · phương án đang xem</h3>${resourceChart(plan.crew.map((people,day)=>({people,day})),o.capacity)}</div></div><p class="form-caption">Thung lũng = tổng mức tăng/giảm kể cả đầu–cuối − 2 × đỉnh. Bằng 0 khi tăng dần đến đỉnh rồi giảm dần; không bắt buộc hình tam giác. Tổng công giữ nguyên nếu không rút ngắn; rút ngắn giả định tăng người để giữ ít nhất hao phí ban đầu, làm tròn lên.</p>${report.alternatives.length>1?`<div class="plan-alternatives"><strong>Phương án tìm được</strong>${report.alternatives.map((a,i)=>`<button data-plan-preview="${i}" class="btn small ${d.preview===i?'primary':'ghost'}">${a.metrics.duration} ngày · ${fmt(a.metrics.peak)} người · ${money(a.costs.total)}</button>`).join('')}</div>`:''}<h3>Đường găng của phương án</h3>${criticalLinks(schedule)}${networkView(schedule,true)}<p class="form-caption">CPM thuần cho bộ thời lượng này: ${schedule.cpmDuration} ngày · công tác găng ${schedule.cpmCritical.map(escape).join(', ')}. Lịch bố trí: ${schedule.duration} ngày. Màu găng của phương án xét thêm các mốc bắt đầu đã đặt; dự trữ theo quan hệ không đồng nghĩa có thể dịch việc mà vẫn đủ nhân lực.</p><div class="table-scroll"><table><thead><tr><th>Công tác</th><th>Bắt đầu → kết thúc</th><th>Thời lượng</th><th>Người/ngày</th><th>Chi phí trực tiếp</th><th>CPM ES → EF</th><th>Găng phương án</th></tr></thead><tbody>${schedule.rows.map(t=>`<tr><td><span class="code">${escape(t.id)}</span>${escape(t.name)}</td><td class="num">${t.es} → ${t.ef}</td><td class="num">${t.duration}</td><td class="num">${t.workers}</td><td class="num">${money(t.cost)}</td><td class="num">${t.cpmEs} → ${t.cpmEf}</td><td><span class="badge ${t.critical?'critical':'neutral'}">${t.critical?'Găng':'Có dự trữ'}</span></td></tr>`).join('')}</tbody></table></div><div class="data-note">Nguồn lực hiện gộp chung, cố định trong mỗi công tác và không ngắt quãng. Chưa phân nghề, tăng ca, năng suất thực tế hoặc lãi vay trong hàm mục tiêu. Đơn giá 0 được hiểu là chưa tính thành phần đó.</div></div></section>`;
+    const report = d.report, plan = chosenPlanning(d), o = report.options;
+    const objectiveLabel = { time: "Thời gian ngắn nhất trong giới hạn nhân lực", workforce: "Điều hòa nhân lực", cost: "Tổng chi phí thấp nhất" }[report.objective] || "";
+    if (!plan) {
+      const near = report.nearest;
+      const nearNote = near ? `<div class="callout">Lịch ngắn nhất tìm được không vượt năng lực: <strong>${near.metrics.duration} ngày</strong> (trễ ${near.metrics.duration - o.maxDuration} ngày so với hạn ${o.maxDuration}), đỉnh ${num(near.metrics.peak)} người. Có thể đặt hạn từ ${near.metrics.duration} ngày rồi giải lại.</div>` : "";
+      const boundNote = report.bounds ? `<p class="form-caption">Cận dưới lý thuyết: thời gian ≥ ${report.bounds.duration} ngày (đường găng hoặc tổng công ÷ năng lực).</p>` : "";
+      return `<section class="panel"><div class="panel-body"><h2>Chưa có lịch thỏa đồng thời năng lực và hạn hoàn thành</h2><p>${escape(report.reason || "Kiểm tra dữ liệu đầu vào.")}</p>${nearNote}${boundNote}<p class="form-caption">Có thể tăng hạn hoàn thành, tăng năng lực, cho phép rút ngắn hoặc điều chỉnh nhân công của công tác.${report.method === "infeasible" ? " Một công tác đã cần nhiều người hơn năng lực, không thể sửa chỉ bằng dịch lịch." : ""}</p></div></section>`;
+    }
+    if (!plan.metrics) return `<div class="callout plan-errors" role="alert">${plan.issues.map((i) => escape(i.message)).join("<br>")}</div>`;
+    const tasks = Planner.effective(project().tasks, plan.durations), schedule = Planner.result(tasks, plan, o.capacity);
+    const m = plan.metrics, b = report.basic.metrics, c = plan.costs, bc = report.basic.costs;
+    const proof = report.method === "exhaustive" ? "Tối ưu đã chứng minh · duyệt đầy đủ miền ngày nguyên" : report.method === "heuristic" ? "Phương án tốt nhất tìm được · chưa chứng minh tối ưu" : o.strategy === "manual" ? "Giữ nguyên mốc bắt đầu bạn nhập" : "Lịch sớm nhất theo quan hệ công việc";
+    const allowApply = plan.valid || (o.strategy === "basic" && !plan.issues.some((i) => ["start", "relation"].includes(i.kind)));
+    const reached = report.bounds ? [m.peak <= report.bounds.peak + 1e-9 ? "đỉnh đã bằng cận dưới (tối ưu về đỉnh)" : "", m.duration <= report.bounds.duration ? "thời gian đã bằng cận dưới (ngắn nhất có thể)" : ""].filter(Boolean) : [];
+    const bounds = report.bounds && o.strategy === "algorithm" ? ` Cận dưới lý thuyết: đỉnh ≥ ${num(report.bounds.peak, 1)} người, thời gian ≥ ${report.bounds.duration} ngày${reached.length ? " — " + reached.join(", ") : ""}.` : "";
+    const rows = [
+      ["Thời gian", b.duration + " ngày", m.duration + " ngày"],
+      ["Đỉnh nhân công Rmax", num(b.peak) + " người", num(m.peak) + " người"],
+      ["Nhân lực trung bình Rtb = S / T", num(b.average, 1) + " người", num(m.average, 1) + " người"],
+      ["Hệ số không điều hòa K1 = Rmax / Rtb", num(b.k1, 2), num(m.k1, 2)],
+      ["Hệ số phân bố K2 = Sdư / S", num(b.k2, 3), num(m.k2, 3)],
+      ["Tổng công S", num(b.work) + " công", num(m.work) + " công"],
+      ["Số người huy động thêm (cộng dồn)", num(b.mobilizations), num(m.mobilizations)],
+      ["Ngày vượt năng lực", b.overDays, m.overDays],
+      ["Chi phí trực tiếp", money(bc.direct), money(c.direct)],
+      ["Gián tiếp theo ngày", money(bc.indirect), money(c.indirect)],
+      ["Huy động nhân công", money(bc.mobilization), money(c.mobilization)],
+      ["Tổng chi phí so sánh", money(bc.total), money(c.total)],
+    ];
+    const alternatives = report.alternatives.length > 1 ? `<div class="plan-alternatives"><strong>Các phương án khác tìm được</strong>${report.alternatives.map((a, i) => `<button data-plan-preview="${i}" class="btn small ${d.preview === i ? "primary" : "ghost"}">${a.metrics.duration} ngày · đỉnh ${num(a.metrics.peak)} · K1 ${num(a.metrics.k1, 2)} · ${shortMoney(a.costs.total)}</button>`).join("")}</div>` : "";
+    const issues = plan.issues.length ? `<div class="callout plan-errors" role="alert">${plan.issues.map((i) => escape(i.message)).join("<br>")}${o.strategy === "basic" ? "<br>Lịch cơ bản phản ánh quan hệ; áp dụng lịch này vẫn giữ các cảnh báo vượt nguồn lực." : ""}</div>` : "";
+    const table = `<div class="plan-comparison table-scroll"><table><thead><tr><th>Chỉ tiêu</th><th>CPM cơ bản</th><th>Phương án đang xem</th></tr></thead><tbody>${rows.map((x) => `<tr><th>${x[0]}</th><td class="num">${x[1]}</td><td class="num"><strong>${x[2]}</strong></td></tr>`).join("")}</tbody></table></div>`;
+    const taskRows = schedule.rows.map((t) => `<tr><td><span class="code">${escape(t.id)}</span>${escape(t.name)}</td><td class="num">${t.es} → ${t.ef}</td><td>${taskDates(project(), t)}</td><td class="num">${t.duration}</td><td class="num">${num(t.workers)}</td><td class="num">${money(t.cost)}</td><td class="num">${t.tf}</td><td class="num">${t.cpmEs} → ${t.cpmEf}</td><td><span class="badge ${t.critical ? "critical" : "neutral"}">${t.critical ? "Găng" : "Có dự trữ"}</span></td></tr>`).join("");
+    return `<section class="panel planning-result"><div class="panel-head"><div><p class="eyebrow">KẾT QUẢ XẾP LỊCH · ${escape(proof)}</p><h2>${m.duration} ngày · đỉnh ${num(m.peak)} người · ${money(c.total)}</h2><p>${objectiveLabel && o.strategy === "algorithm" ? "Mục tiêu: " + objectiveLabel + ". " : ""}${report.evaluated > 1 ? fmt(report.evaluated) + " phương án đã đánh giá" : ""}${report.elapsedMs !== undefined ? " · " + (report.elapsedMs < 10 ? "dưới 0,01" : num(report.elapsedMs / 1000, 2)) + " giây." : ""}${bounds}</p></div><div class="panel-tools"><button class="btn ghost small" data-action="planning-csv">Xuất CSV</button><button class="btn ghost small" data-action="planning-report">Xuất báo cáo</button><button class="btn primary small" data-action="apply-planning" ${!allowApply ? "disabled" : ""}>Áp dụng phương án</button></div></div>${issues}${table}<div class="panel-body"><div class="plan-charts"><div><h3>Trước · CPM cơ bản</h3>${resourceChart(report.basic.crew.map((people, day) => ({ people, day })), o.capacity)}</div><div><h3>Sau · phương án đang xem</h3>${resourceChart(plan.crew.map((people, day) => ({ people, day })), o.capacity)}</div></div><p class="form-caption">K1 càng gần 1 và K2 càng gần 0 thì biểu đồ nhân lực càng đều. Sdư là phần công nằm trên đường trung bình Rtb (nét chấm). Tổng công giữ nguyên nếu không rút ngắn; rút ngắn giả định tăng người để giữ ít nhất hao phí ngày công ban đầu (làm tròn lên).</p>${alternatives}<h3>Đường găng của phương án</h3>${criticalLinks(schedule)}${networkView(schedule, true)}<p class="form-caption">CPM thuần cho bộ thời lượng này: ${schedule.cpmDuration} ngày · công tác găng ${schedule.cpmCritical.map(escape).join(", ")}. Lịch bố trí: ${schedule.duration} ngày. Găng của phương án xét cả quan hệ lẫn giới hạn ${num(o.capacity)} người: dời công tác găng sẽ đẩy lùi ngày hoàn thành hoặc vượt năng lực.</p><div class="table-scroll"><table><thead><tr><th>Công tác</th><th>Bắt đầu → kết thúc</th><th>Ngày thực hiện</th><th>Thời lượng</th><th>Người/ngày</th><th>Chi phí trực tiếp</th><th>Dự trữ (xét nhân lực)</th><th>CPM ES → EF</th><th>Găng phương án</th></tr></thead><tbody>${taskRows}</tbody></table></div><div class="data-note">Nguồn lực gộp chung, cố định trong mỗi công tác và không ngắt quãng. Chưa phân nghề, tăng ca, năng suất thực tế hoặc lãi vay trong hàm mục tiêu. Đơn giá 0 được hiểu là chưa tính thành phần đó.</div></div></section>`;
   }
   async function runPlanning() {
     const d=readPlanningForm(),p=copy(project()),id=p.id,token=++planningRun;
@@ -451,7 +563,7 @@
     planningWorker?.terminate();d.busy=true;render();
     try {
       const report=await new Promise((resolve,reject)=>{
-        if(location.protocol==='file:'||!window.Worker){setTimeout(()=>{try{resolve(Planner.solve(p,d.options,d.manual,{maxMs:1600,maxEvaluations:4000}));}catch(e){reject(e);}},60);return;}
+        if(location.protocol==='file:'||!window.Worker){setTimeout(()=>{try{resolve(Planner.solve(p,d.options,d.manual,{maxMs:2500}));}catch(e){reject(e);}},60);return;}
         const worker=planningWorker=new Worker('planner-worker.js');worker.onmessage=e=>{worker.terminate();if(e.data.error)reject(Error(e.data.error));else resolve(e.data.result);};worker.onerror=e=>{worker.terminate();reject(Error('Không chạy được bộ xếp lịch: '+e.message));};worker.postMessage({project:p,options:d.options,manual:d.manual});
       });
       if(token!==planningRun)return;d.report=report;d.busy=false;
@@ -465,10 +577,10 @@
     if(d.fingerprint!==Planner.fingerprint(project().tasks))throw Error('Dữ liệu đã đổi; hãy xếp lại.');
     const o=d.report.options;
     if(!plan.valid&&o.strategy!=='basic')throw Error('Sửa các vi phạm trước khi áp dụng lịch.');
-    await commit(p=>{p.planning={...o,selected:{fingerprint:Planner.fingerprint(p.tasks),starts:plan.starts,durations:plan.durations}};},'Đã áp dụng '+({manual:'lịch xếp tay',basic:'lịch CPM cơ bản',algorithm:'phương án thuật toán'}[o.strategy]));
+    await commit(p=>{p.capacity=o.capacity;p.planning={...o,selected:{fingerprint:Planner.fingerprint(p.tasks),starts:plan.starts,durations:plan.durations}};},'Đã áp dụng '+({manual:'lịch xếp tay',basic:'lịch CPM cơ bản',algorithm:'phương án thuật toán'}[o.strategy]));
   }
   function exportPlanning(html=false) {
-    const d=planningDraft(),plan=chosenPlanning(d);if(!plan)return;const p=project(),r=Planner.result(Planner.effective(p.tasks,plan.durations),plan);
+    const d=planningDraft(),plan=chosenPlanning(d);if(!plan)return;const p=project(),r=Planner.result(Planner.effective(p.tasks,plan.durations),plan,d.report.options.capacity);
     if(!html){exportCSV('phuong-an-tien-do-chi-phi.csv',['Mã','Công tác','Bắt đầu bố trí','Kết thúc bố trí','Thời lượng','Người/ngày','Chi phí trực tiếp '+p.currency,'Găng phương án','CPM ES','CPM EF','CPM LS','CPM LF','CPM TF','Găng CPM'],r.rows.map(t=>[t.id,t.name,t.es,t.ef,t.duration,t.workers,t.cost,t.critical?'Có':'Không',t.cpmEs,t.cpmEf,t.cpmLs,t.cpmLf,t.cpmTf,t.cpmCritical?'Có':'Không']));return;}
     const body=planningReportView(d),css='body{font:14px/1.6 Arial,sans-serif;color:#17365e;margin:35px;max-width:1200px}h1,h2,h3{color:#032b91}table{width:100%;border-collapse:collapse;margin:18px 0}th,td{border:1px solid #c7d8eb;padding:8px;text-align:left}.num{text-align:right}.panel-tools,.plan-alternatives{display:none}.plan-charts{display:flex;gap:20px}.plan-charts>div{width:50%}svg{width:100%}.form-caption,.data-note{font-size:12px}.path-node{display:inline-block;padding:6px;background:#edf4ff;margin:3px}.critical{color:#b34b32}.table-scroll{overflow:visible}@media print{body{margin:10mm;font-size:10pt}.plan-charts{break-inside:avoid}thead{display:table-header-group}}';
     download('bao-cao-phuong-an-xay-dung.html',`<!doctype html><html lang="vi"><meta charset="utf-8"><title>Báo cáo · ${escape(p.name)}</title><style>${css}</style><h1>${escape(p.name)}</h1><p>Ngày lập ${new Date().toLocaleString('vi-VN',{timeZone:'Asia/Bangkok'})} · Đơn vị ${escape(p.currency)} · Chế độ ${escape(d.report.options.strategy)}</p>${body}</html>`,'text/html;charset=utf-8');
@@ -486,7 +598,7 @@
         `<button class="btn ghost" data-action="baseline">◎ Chốt kế hoạch gốc</button><button class="btn ghost" data-action="csv">↓ CSV</button>${primaryAdd()}`,
       ) +
       `<div class="kpi-grid">${kpi("Thời gian dự án", r.duration, "Kết thúc ngày làm việc cuối: " + finishDate(p, r), "accent", "ngày")}${kpi("Công việc găng", r.critical.length, "Dự trữ toàn phần TF = 0", "danger")}${kpi("Quan hệ trước–sau", r.edges.length, "Hỗ trợ FS · SS · FF · SF")}${kpi("So với kế hoạch gốc", p.baseline ? (r.duration - p.baseline.duration > 0 ? "+" : "") + (r.duration - p.baseline.duration) : "—", p.baseline ? "Chênh lệch thời lượng dự án" : "Chốt kế hoạch gốc để so sánh", "", "ngày")}</div>` +
-      `<section class="panel"><div class="panel-head"><div><h2>Kế hoạch công việc</h2><p>Bấm công việc để sửa thời lượng, quan hệ, nguồn lực và chi phí.</p></div><div class="panel-tools"><input id="task-search" type="search" placeholder="Tìm mã, tên, phụ trách…" value="${escape(search)}" aria-label="Tìm công việc"><label class="filter-check"><input id="critical-filter" type="checkbox" ${criticalOnly ? "checked" : ""}>Chỉ công việc găng</label></div></div><div class="tabbar">${[
+      `<section class="panel"><div class="panel-head"><div><h2>Kế hoạch công việc</h2><p>Bấm công việc để sửa thời lượng, quan hệ, nguồn lực và chi phí.</p></div><div class="panel-tools"><input id="task-search" type="search" placeholder="Tìm mã, tên, phụ trách…" value="${escape(search)}" aria-label="Tìm công việc"><label class="filter-check"><input id="critical-filter" type="checkbox" ${criticalOnly ? "checked" : ""}>Chỉ công việc găng</label></div></div><div class="tabbar" role="tablist" aria-label="Chế độ xem tiến độ">${[
         ["gantt", "Biểu đồ Gantt"],
         ["tasks", "Dữ liệu đầu vào"],
         ["cpm", "Thông số CPM"],
@@ -494,11 +606,11 @@
       ]
         .map(
           ([k, v]) =>
-            `<button data-schedule-tab="${k}" class="${scheduleTab === k ? "active" : ""}">${v}</button>`,
+            `<button data-schedule-tab="${k}" role="tab" aria-selected="${scheduleTab === k}" class="${scheduleTab === k ? "active" : ""}">${v}</button>`,
         )
         .join(
           "",
-        )}<span style="margin-left:auto" class="currency-label">${escape(p.currency)}</span></div><div id="schedule-content">${!p.tasks.length ? empty("Chưa có công việc", "Bạn có thể tạo công việc mới hoặc mở một bộ dữ liệu mẫu.", "add-task", "+ Thêm công việc") : scheduleTab === "gantt" ? `<div class="table-scroll">${gantt(r)}</div>` : scheduleTab === "cpm" ? `<div class="table-scroll"><table><thead><tr><th>Mã</th><th>Công việc</th><th>ES</th><th>EF</th><th>LS</th><th>LF</th><th>TF</th><th>Dự trữ riêng</th><th>Trạng thái</th><th>Bố trí BĐ → KT</th></tr></thead><tbody>${rows.map((t) => `<tr class="click-row" data-edit-task="${escape(t.id)}"><td>${escape(t.id)}</td><td class="task-name">${escape(t.name)}</td>${["es", "ef", "ls", "lf", "tf", "ff"].map((k) => `<td class="num">${r.placement ? t[({es:"cpmEs",ef:"cpmEf",ls:"cpmLs",lf:"cpmLf",tf:"cpmTf",ff:"cpmFf"})[k]] : t[k]}</td>`).join("")}<td><span class="badge ${t.critical ? "critical" : "neutral"}">${(t.cpmCritical??t.critical) ? "Găng CPM" : "Có dự trữ"}</span></td><td class="num">${t.es} → ${t.ef}</td></tr>`).join("")}</tbody></table></div>` : `<div class="table-scroll"><table><thead><tr><th>Công việc</th><th>Thời lượng</th><th>Quan hệ trước</th><th>Phụ trách</th><th>Hoàn thành</th><th>Ngân sách</th><th>Nhân công</th></tr></thead><tbody>${rows.map((t) => `<tr class="click-row" data-edit-task="${escape(t.id)}"><td class="task-name"><span class="code">${escape(t.id)}</span>${escape(t.name)}</td><td class="num">${t.duration} ngày</td><td class="task-deps">${escape(CT.depText(t.deps)) || "—"}</td><td>${escape(t.owner) || "Chưa giao"}</td><td><span class="tiny-progress"><i><b style="width:${t.progress}%"></b></i>${fmt(t.progress)}%</span></td><td class="num">${money(t.cost)}</td><td class="num">${t.workers}</td></tr>`).join("")}</tbody></table></div>`}</div><div class="data-note">${legend()}<p style="margin-top:10px">Mốc 0 là đầu ngày khởi công. EF là ranh giới kết thúc, không phải số thứ tự ngày cuối. Lịch ${p.workdays.length} ngày/tuần, chưa trừ ngày lễ. Nét xanh dọc: ngày báo cáo.${p.baseline ? " Nét mảnh dưới thanh: kế hoạch gốc." : ""}</p></div></section>` +
+        )}<span style="margin-left:auto" class="currency-label">${escape(p.currency)}</span></div><div id="schedule-content">${!p.tasks.length ? empty("Chưa có công việc", "Bạn có thể tạo công việc mới hoặc mở một bộ dữ liệu mẫu.", "add-task", "+ Thêm công việc") : scheduleTab === "gantt" ? `<div class="table-scroll">${gantt(r)}</div>` : scheduleTab === "cpm" ? `<div class="table-scroll"><table><thead><tr><th>Mã</th><th>Công việc</th><th>ES</th><th>EF</th><th>LS</th><th>LF</th><th>TF</th><th>Dự trữ riêng</th><th>Trạng thái</th><th>Ngày thực hiện</th>${r.placement ? "<th>CPM thuần ES → EF · TF</th>" : ""}</tr></thead><tbody>${rows.map((t) => `<tr class="click-row" data-edit-task="${escape(t.id)}"><td>${escape(t.id)}</td><td class="task-name">${escape(t.name)}</td>${["es", "ef", "ls", "lf", "tf", "ff"].map((k) => `<td class="num">${t[k]}</td>`).join("")}<td><span class="badge ${t.critical ? "critical" : "neutral"}">${t.critical ? "Găng" : "Có dự trữ"}</span></td><td>${taskDates(p, t)}</td>${r.placement ? `<td class="num">${t.cpmEs} → ${t.cpmEf} · ${t.cpmTf}</td>` : ""}</tr>`).join("")}</tbody></table></div>${r.placement ? `<p class="form-caption" style="padding:12px 20px">Đang áp dụng phương án xếp lịch: ES/EF là mốc đã bố trí; LS/LF/TF tính lùi có xét giới hạn ${num(p.planning?.capacity ?? p.capacity)} người. Cột cuối là CPM thuần (không xét nhân lực) để đối chiếu.</p>` : ""}` : `<div class="table-scroll"><table><thead><tr><th>Công việc</th><th>Thời lượng</th><th>Quan hệ trước</th><th>Phụ trách</th><th>Hoàn thành</th><th>Ngân sách</th><th>Nhân công</th></tr></thead><tbody>${rows.map((t) => `<tr class="click-row" data-edit-task="${escape(t.id)}"><td class="task-name"><span class="code">${escape(t.id)}</span>${escape(t.name)}</td><td class="num">${t.duration} ngày</td><td class="task-deps">${escape(CT.depText(t.deps)) || "—"}</td><td>${escape(t.owner) || "Chưa giao"}</td><td><span class="tiny-progress"><i><b style="width:${t.progress}%"></b></i>${fmt(t.progress)}%</span></td><td class="num">${money(t.cost)}</td><td class="num">${t.workers}</td></tr>`).join("")}</tbody></table></div>`}</div><div class="data-note">${legend()}<p style="margin-top:10px">Mốc 0 là đầu ngày khởi công. EF là ranh giới kết thúc, không phải số thứ tự ngày cuối. Lịch ${p.workdays.length} ngày/tuần${p.holidays?.length ? ", trừ " + p.holidays.length + " ngày lễ" : ", chưa nhập ngày lễ"}. Nét xanh dọc: ngày báo cáo.${p.baseline ? " Nét mảnh dưới thanh: kế hoạch gốc." : ""}</p></div></section>` +
       panel(
         "Liên kết găng",
         "Các quan hệ chặt của lịch đang áp dụng; CPM thuần được giữ trong tab Thông số CPM",
@@ -509,10 +621,10 @@
   }
   function criticalLinks(r) {
     const e = r.edges.filter((x) => x.critical);
-    return `<div class="path-line">${e.length ? e.map((x) => `<span class="path-node">${escape(x.from)} <span style="font-size:9px;margin:0 9px;opacity:.7">${x.type}${x.lag >= 0 ? "+" : ""}${x.lag} →</span> ${escape(x.to)}</span>`).join("") : r.critical.map((id) => `<span class="path-node">${escape(id)}</span>`).join("") || '<span class="muted">Chưa có công việc.</span>'}</div>`;
+    return `<div class="path-line">${e.length ? e.map((x) => `<span class="path-node">${escape(x.from)} <span class="path-rel">${x.type}${x.lag >= 0 ? "+" : ""}${x.lag} →</span> ${escape(x.to)}</span>`).join("") : r.critical.map((id) => `<span class="path-node">${escape(id)}</span>`).join("") || '<span class="muted">Chưa có công việc.</span>'}</div>`;
   }
   const graphDrafts=new Map();let graphNodeStyle='circle';
-  function graphDraftFor(r,kind){const key=project().id+':'+kind,graph=GraphBoard.build(r,kind);let draft=graphDrafts.get(key);if(!draft){let local=null;try{local=JSON.parse(localStorage.getItem('nen.graph.'+key));}catch{}draft={positions:GraphBoard.positions(graph,local||project().networkLayouts?.[kind]||{}),zoom:1,dirty:false};graphDrafts.set(key,draft);}draft.positions=GraphBoard.positions(graph,draft.positions);draft.graph=graph;return draft;}
+  function graphDraftFor(r,kind){const key=project().id+':'+kind+(kind==='aon'?':'+graphNodeStyle:''),graph=GraphBoard.build(r,kind,{style:graphNodeStyle});let draft=graphDrafts.get(key);if(!draft){let local=null;try{local=JSON.parse(localStorage.getItem('nen.graph.'+key));}catch{}const saved=project().networkLayouts?.[kind];draft={positions:GraphBoard.positions(graph,(team?saved||local:local||saved)||{}),zoom:1,dirty:false};graphDrafts.set(key,draft);}draft.positions=GraphBoard.positions(graph,draft.positions);draft.graph=graph;return draft;}
   function graphMarkup(r,kind='aon',interactive=false){const draft=graphDraftFor(r,kind);return GraphBoard.svg(draft.graph,draft.positions,graphNodeStyle,interactive);}
   function graphTools(){return `<div class="graph-tools"><label>Kiểu nút <select id="graph-node-style"><option value="circle" ${graphNodeStyle==='circle'?'selected':''}>Tròn · theo bài giảng</option><option value="card" ${graphNodeStyle==='card'?'selected':''}>Thẻ thông số</option></select></label><button class="btn ghost small" data-action="graph-auto">Xếp tự động</button><button class="btn ghost small" data-action="graph-fit">Vừa khung</button><button class="btn ghost small" data-graph-zoom="0.85" aria-label="Thu nhỏ sơ đồ">−</button><button class="btn ghost small" data-graph-zoom="1.18" aria-label="Phóng to sơ đồ">+</button><button class="btn primary small" data-action="graph-save" ${team&&!["owner","editor"].includes(project()._role)?'disabled':''}>Lưu bố trí</button><span id="graph-save-state" class="form-caption">Kéo nút để sắp xếp; nháy đúp công việc để sửa.</span></div>`;}
   function activeGraphDraft(){return graphDraftFor(calc(),networkType==='aoa'?'aoa':'aon');}
@@ -528,12 +640,12 @@
     svg.addEventListener('keydown',event=>{const key=event.target.closest('[data-node-key]')?.dataset.nodeKey;if(!key)return;if(event.key==='Enter'){event.preventDefault();event.stopPropagation();if(project().tasks.some(t=>t.id===key))taskModal(key);return;}const delta={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[event.key];if(!delta)return;event.preventDefault();event.stopPropagation();const scale=event.shiftKey?50:10,p=draft.positions[key];p.x=Math.max(100,Math.min(20000,p.x+delta[0]*scale));p.y=Math.max(85,Math.min(20000,p.y+delta[1]*scale));draft.dirty=true;paint();svg.querySelector('[data-node-key="'+CSS.escape(key)+'"]')?.focus();});
   }
 
-  let networkType='aon';
+  let networkType='aon',pertTarget=NaN;
   function networkChoices(){return `<div class="network-choices"><label for="network-type">Cách thể hiện</label><select id="network-type"><option value="aon" ${networkType==='aon'?'selected':''}>AON / PDM · công việc trên nút</option><option value="aoa" ${networkType==='aoa'?'selected':''}>AOA · công việc trên mũi tên</option><option value="gantt" ${networkType==='gantt'?'selected':''}>Gantt · tiến độ ngang</option><option value="linked" ${networkType==='linked'?'selected':''}>Gantt liên kết</option><option value="linear" ${networkType==='linear'?'selected':''}>Tiến độ xiên / dây chuyền</option><option value="pert" ${networkType==='pert'?'selected':''}>PERT · thời gian ba ước lượng</option></select><small>Tham khảo CI5407 C5 và CI5405 C3–C4.</small></div>`;}
   function graphResult(title,description,body){return heading(title,description,`<button class="btn ghost" data-action="network-svg">Tải SVG</button>`)+networkChoices()+panel(title,description,`<div class="network-wrap" id="network-svg">${body}</div>`);}
-  function aoaView(r){try{const markup=graphMarkup(r,'aoa',true);return heading('Sơ đồ AOA','Công việc trên mũi tên; nút là sự kiện, có thời điểm sớm và muộn.',`<button class="btn ghost" data-action="network-svg">Tải SVG</button>`)+networkChoices()+graphTools()+panel('Mạng AOA','Nét đứt là công việc giả/chờ; nhãn công việc ghi thời lượng và người/ngày.',`<div class="network-wrap" id="network-svg">${markup}</div>`)+`<div class="callout">AOA cổ điển dùng quan hệ FS với lag không âm. Các mốc bố trí nguồn lực được thể hiện riêng trên Gantt; kéo nút chỉ thay bố cục.</div>`;}catch(error){return heading('Sơ đồ AOA','Chọn cách thể hiện phù hợp với dữ liệu.')+networkChoices()+`<div class="callout">${escape(error.message)}<br><button class="text-link" data-action="show-aon">Xem AON / PDM</button></div>`;}}
+  function aoaView(r){try{const markup=graphMarkup(r,'aoa',true);return heading('Sơ đồ AOA','Công việc trên mũi tên; nút là sự kiện, có thời điểm sớm và muộn.',`<button class="btn ghost" data-action="network-svg">Tải SVG</button>`)+networkChoices()+graphTools()+panel('Mạng AOA','Nét đứt: công việc giả (0 ngày). Mũi tên «Chờ n»: thời gian chờ của quan hệ FS có lag. Sự kiện đánh số 1…n, đuôi luôn nhỏ hơn đầu.',`<div class="network-wrap" id="network-svg">${markup}</div>`)+`<div class="callout">AOA cổ điển dùng quan hệ FS với lag không âm. Các mốc bố trí nguồn lực được thể hiện riêng trên Gantt; kéo nút chỉ thay bố cục.</div>`;}catch(error){return heading('Sơ đồ AOA','Chọn cách thể hiện phù hợp với dữ liệu.')+networkChoices()+`<div class="callout">${escape(error.message)}<br><button class="text-link" data-action="show-aon">Xem AON / PDM</button></div>`;}}
   function linkedGantt(r){const width=1150,label=270,span=820,den=Math.max(1,r.duration),rowHeight=43,height=65+r.rows.length*rowHeight,positions=new Map(r.rows.map((t,i)=>[t.id,{t,y:65+i*rowHeight}]));const x=v=>label+v/den*span;return `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Gantt liên kết"><defs><marker id="linked-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto"><path d="M0 0L6 3L0 6z" fill="#5a7fa7"/></marker></defs>${Array.from({length:11},(_,i)=>`<path d="M${x(r.duration*i/10)} 35V${height}" stroke="#dfebf7"/><text x="${x(r.duration*i/10)}" y="22" font-size="11" text-anchor="middle" fill="#466b95">${fmt(r.duration*i/10,1)}</text>`).join('')}${r.edges.map(e=>{const a=positions.get(e.from),b=positions.get(e.to),sx=x(e.type==='FS'||e.type==='FF'?a.t.ef:a.t.es),tx=x(e.type==='FF'||e.type==='SF'?b.t.ef:b.t.es);return `<path d="M${sx} ${a.y}C${sx+22} ${a.y},${tx-22} ${b.y},${tx} ${b.y}" stroke="${e.critical?'#b45e3b':'#849fba'}" fill="none" stroke-width="1.3" marker-end="url(#linked-arrow)"/>`;}).join('')}${r.rows.map((t,i)=>`<text x="10" y="${positions.get(t.id).y+4}" font-size="12" fill="#204a7c">${escape(t.id+' · '+t.name.slice(0,27))}</text><rect x="${x(t.es)}" y="${positions.get(t.id).y-10}" width="${Math.max(3,t.duration/den*span)}" height="20" rx="3" fill="${t.critical?'#bf6b49':'#2a80cb'}"/><text x="${x(t.es)+5}" y="${positions.get(t.id).y+4}" font-size="10" fill="#fff">${t.duration}n</text>`).join('')}</svg>`;}
-  function linearView(r){try{const data=Networks.linear(r.rows);if(!data.rows.length)return heading('Tiến độ xiên / dây chuyền','Trục ngang là thời gian; trục đứng là phân đoạn.')+networkChoices()+`<div class="callout">Chưa có dữ liệu phân đoạn. Trong biểu mẫu công việc, mở “Sơ đồ xiên”, nhập số phân đoạn và tên nhóm quá trình. Các công tác cùng quá trình ở các phân đoạn sẽ được nối thành dải tiến độ.<br><button class="text-link" data-page="schedule">Nhập phân đoạn cho công việc</button></div>`;const width=1100,height=Math.max(320,100+data.segments*70),x=t=>110+t/Math.max(1,data.duration)*910,y=s=>height-50-s/data.segments*(height-110),colors=['#1269b3','#bd6e45','#498978','#7f6aa2'];let svg=`<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Tiến độ xiên">`;for(let i=1;i<=data.segments;i++)svg+=`<path d="M100 ${y(i)}H1040" stroke="#d9e6f3"/><text x="90" y="${y(i)+4}" font-size="12" text-anchor="end" fill="#315d8b">PĐ ${i}</text>`;data.groups.forEach((group,i)=>{const c=colors[i%colors.length],start=group.rows.map(t=>x(t.es)+','+y(t.segment)),finish=group.rows.map(t=>x(t.ef)+','+y(t.segment));svg+=`<polygon points="${[...start,...finish.reverse()].join(' ')}" fill="${c}" opacity=".14"/><polyline points="${start.join(' ')}" fill="none" stroke="${c}" stroke-width="2"/>`;for(const t of group.rows)svg+=`<path d="M${x(t.es)} ${y(t.segment)}H${x(t.ef)}" stroke="${c}" stroke-width="5"/><text x="${x(t.es)+4}" y="${y(t.segment)-8}" font-size="11" fill="${c}">${escape(t.id)}</text>`;});for(let i=0;i<=10;i++)svg+=`<text x="${x(data.duration*i/10)}" y="${height-12}" font-size="11" text-anchor="middle" fill="#456d95">${fmt(data.duration*i/10,1)}</text>`;svg+='</svg>';return graphResult('Tiến độ xiên / dây chuyền','Dải nối các công tác cùng quá trình qua các phân đoạn, lấy thời điểm từ lịch hiện tại.',svg);}catch(error){return heading('Tiến độ xiên','Kiểm tra phân đoạn và nhóm quá trình.')+networkChoices()+`<div class="callout">${escape(error.message)}</div>`;}}
+  function linearView(r){try{const data=Networks.linear(r.rows,r);if(!data.rows.length)return heading('Tiến độ xiên / dây chuyền','Trục ngang là thời gian; trục đứng là phân đoạn.')+networkChoices()+`<div class="callout">Chưa có dữ liệu phân đoạn. Trong biểu mẫu công việc, mở “Sơ đồ xiên”, nhập số phân đoạn và tên nhóm quá trình. Các công tác cùng quá trình ở các phân đoạn sẽ được nối thành dải tiến độ.<br><button class="text-link" data-page="schedule">Nhập phân đoạn cho công việc</button></div>`;const warn=data.warnings?.length?`<div class="callout warning"><strong>Cần kiểm tra dây chuyền</strong><br>${data.warnings.map(escape).join('<br>')}</div>`:'';return graphResult('Tiến độ xiên / dây chuyền','Mỗi công tác là một đường xiên qua dải phân đoạn của nó; thời điểm lấy từ lịch đang áp dụng.',GraphBoard.cyclogram(data))+warn;}catch(error){return heading('Tiến độ xiên','Kiểm tra phân đoạn và nhóm quá trình.')+networkChoices()+`<div class="callout">${escape(error.message)}</div>`;}}
 
   function networkView(input = null, preview = false) {
     let r = input || calc();
@@ -542,7 +654,7 @@
       if(networkType==='linked')return graphResult('Gantt liên kết','Thanh là thời lượng; đường nối là quan hệ công việc.',linkedGantt(r));
       if(networkType==='linear')return linearView(r);
       if(networkType==='gantt')return heading('Gantt · tiến độ ngang','Lịch đang áp dụng')+networkChoices()+panel('Biểu đồ Gantt','Công việc găng được tô màu',gantt(r));
-      if(networkType==='pert'){const estimate=Networks.pert(project().tasks);return heading('PERT · thời gian kỳ vọng','te = (a + 4m + b) / 6; phương sai = ((b − a) / 6)².')+networkChoices()+`<div class="callout">Thời gian theo kỳ vọng: ${fmt(estimate.duration,2)} ngày. ${estimate.deterministic?'Các công tác hiện có a = m = b, nên kết quả trùng thời gian xác định. Nhập ba ước lượng trong biểu mẫu công việc để dùng PERT.':'Đường găng tính theo thời gian kỳ vọng; chưa tính xác suất hoàn thành toàn mạng hoặc mô phỏng Monte Carlo.'}</div>`+panel('Mạng PERT theo kỳ vọng','Dùng nút và quan hệ trước–sau',networkView(estimate,true))+panel('Ước lượng từng công việc','Số liệu gốc vẫn được giữ nguyên',`<div class="table-scroll"><table><thead><tr><th>Mã</th><th>a</th><th>m</th><th>b</th><th>te</th><th>Phương sai</th></tr></thead><tbody>${estimate.rows.map(t=>{const p=t.pert||{a:t.duration,m:t.duration,b:t.duration};return `<tr><td>${escape(t.id)}</td><td>${p.a}</td><td>${p.m}</td><td>${p.b}</td><td>${fmt(t.duration,2)}</td><td>${fmt(estimate.variance[t.id],3)}</td></tr>`;}).join('')}</tbody></table></div>`);}
+      if(networkType==='pert'){const estimate=Networks.pert(project().tasks),info=estimate.project||Networks.pertProbability(estimate);const target=Number.isFinite(pertTarget)?pertTarget:Math.ceil(info.te+info.sigma),chance=Networks.pertProbability(estimate,target);const summary=`<section class="panel pert-summary"><div class="panel-body"><div class="pert-grid"><div><p class="muted">Thời gian kỳ vọng Te</p><div class="info-number">${num(info.te,2)} <span>ngày</span></div></div><div><p class="muted">Độ lệch chuẩn σ = √Σσ²</p><div class="info-number">${num(info.sigma,2)} <span>ngày</span></div></div><div><label for="pert-target" class="muted">Hạn cần đạt T (ngày)</label><input id="pert-target" type="number" min="0" step="1" value="${target}"></div><div><p class="muted">P(hoàn thành ≤ T)</p><div class="info-number">${chance.probability===null?'—':num(chance.probability*100,1)+'<span>%</span>'}</div><small>${chance.z===null?'σ = 0: kết quả xác định':'Z = (T − Te) / σ = '+num(chance.z,2)}</small></div></div><p class="form-caption">Đường găng kỳ vọng: ${info.path.map(escape).join(' → ')}. Hoàn thành với xác suất 90% sau ${num(info.p90,1)} ngày, 95% sau ${num(info.p95,1)} ngày.${estimate.deterministic?' Các công tác hiện có a = m = b nên σ = 0; nhập ba ước lượng trong biểu mẫu công việc để dùng PERT.':''}</p>${info.warnings?.length?`<div class="callout warning">${info.warnings.map(escape).join('<br>')}</div>`:''}</div></section>`;return heading('PERT · thời gian ba ước lượng','te = (a + 4m + b) / 6; σ² = ((b − a) / 6)²; P(T) = Φ((T − Te) / σ) theo đường găng kỳ vọng.')+networkChoices()+summary+panel('Mạng PERT theo kỳ vọng','Dùng nút và quan hệ trước–sau',networkView(estimate,true))+panel('Ước lượng từng công việc','Số liệu gốc vẫn được giữ nguyên',`<div class="table-scroll"><table><thead><tr><th>Mã</th><th>a</th><th>m</th><th>b</th><th>te</th><th>Phương sai</th></tr></thead><tbody>${estimate.rows.map(t=>{const p=t.pert||{a:t.duration,m:t.duration,b:t.duration};return `<tr><td>${escape(t.id)}</td><td>${p.a}</td><td>${p.m}</td><td>${p.b}</td><td>${fmt(t.duration,2)}</td><td>${fmt(estimate.variance[t.id],3)}</td></tr>`;}).join('')}</tbody></table></div>`);}
     }
     if (!r.rows.length)
       return (
@@ -572,47 +684,114 @@
     sceneDay = Math.min(sceneDay || project().statusDay, r.duration);
     return (
       heading(
-        "Nhìn công trình theo thời gian.",
+        "Thi công 3D",
         "Mô phỏng trình tự thi công gắn với kế hoạch CPM của dự án.",
         `<button class="btn ghost" data-page="schedule">Chỉnh kế hoạch ↗</button>`,
       ) +
       `<section class="panel scene-panel"><div class="panel-head"><div><h2 id="scene-stage-label">Mô phỏng tiến độ kế hoạch</h2><p>Đào đất → lót, thép và bê tông móng → lấp, đầm từng lớp → kết cấu → hoàn thiện</p></div><span class="badge" id="scene-date"></span></div>${constructionControls("project")}<div class="scene-details"><span>CHI TIẾT THI CÔNG</span><button data-detail-mode="foundation">Đi thép móng</button><button data-detail-mode="starters">Thép chờ</button><button data-detail-mode="frame">Cột · dầm · sàn</button><button data-detail-mode="joint">Mạch ngừng</button><button data-detail-mode="auto" aria-pressed="true">Về tiến độ</button></div><div class="scene-canvas-wrap"><div id="machine-status" class="machine-status"></div><img class="scene-poster" src="assets/scene-preview.webp" alt="" aria-hidden="true"><canvas id="project-canvas" aria-label="Mô hình công trình minh họa theo ngày tiến độ"></canvas></div><div class="scene-controls"><button class="btn small" data-action="play-scene" id="play-scene">▶ Chạy</button><button class="btn small motion-pause" data-action="pause-motion" aria-pressed="false">Dừng chuyển động</button><input id="scene-slider" type="range" min="0" max="${Math.max(1, r.duration)}" value="${sceneDay}" aria-label="Ngày làm việc của mô phỏng"><span class="scene-day" id="scene-day-label"></span></div><div id="detail-note" class="detail-note" hidden></div></section><div id="phase-summary" class="phase-grid"></div><div class="callout" style="margin-top:20px">Khối công trình cơ sở 2 minh họa 12 tầng; các công việc được gắn vào giai đoạn trong biểu mẫu. Mô phỏng dựa trên ES/EF, thể hiện <strong>kế hoạch</strong>, chưa phải mô hình BIM từ bản vẽ hay khối lượng nghiệm thu thực tế. Nguyên tắc trình tự tham khảo CI5405, chương 2 trang 25 và chương 3.</div>`
     );
   }
+  // ---- Ánh xạ lịch dự án → bước thi công minh họa (ConstructionSequence) ----
+  const foldVN = (s) =>
+    String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/gi, "d").toLowerCase().replace(/van khuon/g, "cop pha");
+  const STOP_WORDS = new Set(["va", "cac", "cua", "theo", "tu", "tung", "quanh", "cong", "tac", "thi", "phan", "voi", "o"]);
+  const wordsOf = (s) => new Set(foldVN(s).split(/[^a-z0-9]+/).filter((w) => w && !STOP_WORDS.has(w)));
+  /** Mức giống nhau công việc ↔ bước: "tầng a–b" khớp theo tầng, còn lại theo từ chung (Jaccard). */
+  function stepSimilarity(task, step) {
+    const name = foldVN(task.name), floor = Number(step.group.match(/^Tầng (\d+)$/)?.[1]);
+    const range = name.match(/tang\s*(\d+)\s*(?:[-–—]|den)\s*(\d+)/) || name.match(/tang\s*(\d+)/);
+    if (range && floor) return floor >= Number(range[1]) && floor <= Number(range[2] ?? range[1]) ? 1 : 0;
+    const a = wordsOf(task.name), b = wordsOf(step.name);
+    let common = 0;
+    for (const w of a) if (b.has(w)) common++;
+    return common ? common / (a.size + b.size - common) : 0;
+  }
+  const sceneSpanCache = new WeakMap();
+  /**
+   * Mỗi công việc có giai đoạn được gán một đoạn [start, end) trên thang tiến trình của mô hình.
+   * Trong một giai đoạn, công việc (theo ES) được canh hàng có thứ tự với các bước bằng quy hoạch động
+   * để tổng mức giống lớn nhất; end dừng sau bước cuối còn khớp tốt (vd. đổ bê tông → bảo dưỡng).
+   */
+  function sceneSpans(r) {
+    if (sceneSpanCache.has(r)) return sceneSpanCache.get(r);
+    const steps = ConstructionSequence.steps, bounds = BuildScene.phaseBounds, spans = new Map();
+    PHASES.forEach((_, phase) => {
+      const lo = bounds[phase], hi = bounds[phase + 1];
+      const ids = steps.map((s, i) => i).filter((i) => steps[i].p >= lo && (steps[i].p < hi || (hi === 1 && steps[i].p <= 1)));
+      const tasks = r.rows.filter((t) => phaseFor(t) === phase).sort((a, b) => a.es - b.es || a.ef - b.ef);
+      if (!tasks.length) return;
+      const after = (index) => steps[index + 1]?.p ?? 1;
+      if (!ids.length || tasks.length > ids.length) {
+        // Ít bước hơn công việc: chia đều thang của giai đoạn theo thứ tự.
+        tasks.forEach((t, k) => spans.set(t.id, { start: lo + ((hi - lo) * k) / tasks.length, end: lo + ((hi - lo) * (k + 1)) / tasks.length, matched: ids.some((i) => stepSimilarity(t, steps[i]) > 0) }));
+        return;
+      }
+      const n = tasks.length, m = ids.length, sim = tasks.map((t) => ids.map((i) => stepSimilarity(t, steps[i])));
+      const totalDuration = tasks.reduce((s, t) => s + Math.max(1, t.duration), 0);
+      // best[j][k]: điểm tốt nhất khi j công việc đầu phủ k bước đầu; choice lưu điểm cắt.
+      const best = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(-Infinity)), cut = best.map((row) => row.map(() => 0));
+      best[0][0] = 0;
+      for (let j = 1; j <= n; j++)
+        for (let k = j; k <= m - (n - j); k++)
+          for (let i = j - 1; i < k; i++) {
+            if (best[j - 1][i] === -Infinity) continue;
+            let top = 0;
+            for (let x = i; x < k; x++) top = Math.max(top, sim[j - 1][x]);
+            // Hòa điểm: ưu tiên chia số bước gần với tỷ lệ thời lượng.
+            const share = Math.abs((k - i) / m - Math.max(1, tasks[j - 1].duration) / totalDuration);
+            const score = best[j - 1][i] + top - 0.01 * share;
+            if (score > best[j][k]) {
+              best[j][k] = score;
+              cut[j][k] = i;
+            }
+          }
+      for (let j = n, k = m; j > 0; j--) {
+        const i = cut[j][k], block = sim[j - 1].slice(i, k), top = Math.max(...block);
+        let last = k - 1;
+        if (top > 0) while (last > i && block[last - i] < 0.6 * top) last--;
+        spans.set(tasks[j - 1].id, { start: steps[ids[i]].p, end: after(ids[last]), matched: top > 0 });
+        k = i;
+      }
+    });
+    sceneSpanCache.set(r, spans);
+    return spans;
+  }
+  /** Tiến trình mô hình đầu ngày `day`: việc đã xong đẩy tiến trình lên, việc đang làm chậm nhất quyết định. */
+  function sceneProgress(r, day) {
+    const spans = sceneSpans(r);
+    let done = 0;
+    const active = [];
+    for (const t of r.rows) {
+      const span = spans.get(t.id);
+      if (!span) continue;
+      if (t.duration ? day >= t.ef : day >= t.es) done = Math.max(done, span.end);
+      else if (day >= t.es) active.push({ span, p: span.start + (span.end - span.start) * ((day - t.es) / t.duration) });
+    }
+    // Việc không khớp bước nào (vd. trực bảo vệ) chỉ dùng khi không còn việc thi công khác.
+    const live = active.filter((a) => a.span.end > done), physical = live.filter((a) => a.span.matched);
+    const current = (physical.length ? physical : live).map((a) => a.p);
+    const raw = current.length ? Math.max(done, Math.min(...current)) : done;
+    // Hiện bước đã bắt đầu (không làm tròn lên bước sau, vd. cốp pha chưa xong thì chưa đổ bê tông).
+    const steps = ConstructionSequence.steps;
+    let index = 0;
+    while (index + 1 < steps.length && steps[index + 1].p <= raw + 1e-9) index++;
+    return raw < steps[0].p ? raw : steps[index].p;
+  }
   function modelProgress(r, day) {
-    const hasStages=r.rows.some(t=>phaseFor(t)>=0);
+    const hasStages = r.rows.some((t) => phaseFor(t) >= 0);
     const phases = PHASES.map((name, i) => {
       const rows = r.rows.filter((t) => phaseFor(t) === i);
       return {
         name,
         rows,
         value: rows.length
-          ? rows.reduce(
-              (s, t) =>
-                s +
-                (t.duration
-                  ? Math.max(0, Math.min(1, (day - t.es) / t.duration))
-                  : Number(day >= t.es)),
-              0,
-            ) / rows.length
+          ? rows.reduce((s, t) => s + (t.duration ? Math.max(0, Math.min(1, (day - t.es) / t.duration)) : Number(day >= t.es)), 0) / rows.length
           : i === 0 && hasStages
-            ? day > 0
-              ? 1
-              : 0
+            ? day > 0 ? 1 : 0
             : null,
       };
     });
-    let weighted = 0;
-    const bounds = BuildScene.phaseBounds.slice(1);
-    phases.forEach((p, i) => {
-      if (p.value !== null && p.value > 0)
-        weighted = Math.max(
-          weighted,
-          (i ? bounds[i - 1] : 0) +
-            (bounds[i] - (i ? bounds[i - 1] : 0)) * p.value,
-        );
-    });
-    return { phases, progress: weighted };
+    return { phases, progress: hasStages ? sceneProgress(r, day) : 0 };
   }
   function mountScene() {
     const r = calc();
@@ -629,7 +808,7 @@
         current.progress = BuildScene.phaseMiddle(previewStage);
       $("#scene-day-label").textContent = `Ngày ${sceneDay} / ${r.duration}`;
       $("#scene-date").textContent =
-        dateLabel(CT.dateAt(project().start, sceneDay, project().workdays)) +
+        dateLabel(workDate(project(), sceneDay)) +
         " · đầu ngày";
       const equipment = ConstructionEquipment.plan(current.progress);
       $("#machine-status").textContent =
@@ -764,16 +943,16 @@
       e = CT.estimate(p.boq, p.estimate);
     return (
       heading(
-        "Dự toán từ từng khối lượng.",
+        "Dự toán khối lượng",
         "Đơn giá nhập theo một đơn vị công tác; tất cả số tiền dùng cùng loại tiền của dự án.",
         `<button class="btn ghost" data-action="estimate-settings">Tỷ lệ & chi phí</button><button class="btn ghost" data-action="boq-csv">↓ CSV</button><button class="btn primary" data-action="add-boq">+ Thêm công tác</button>`,
       ) +
-      `<div class="kpi-grid">${kpi("Chi phí trực tiếp", shortMoney(e.direct), "Vật liệu + nhân công + máy", "accent")}${kpi("Chi phí chung & khác", shortMoney(e.overhead + e.other), "Chi phí chung: " + fmt(p.estimate.overhead) + "%")}${kpi("Dự phòng", shortMoney(e.contingency), fmt(p.estimate.contingency) + "% × tổng trước dự phòng")}${kpi("Tổng dự toán", shortMoney(e.total), "Thuế nhập tùy chỉnh: " + fmt(p.estimate.vat) + "%")}</div>` +
+      `<div class="kpi-grid">${kpi("Chi phí trực tiếp", shortMoney(e.direct), "Vật liệu + nhân công + máy", "accent")}${kpi("Chung, TL & khác", shortMoney(e.overhead + e.profit + e.other), "Chi phí chung " + pct(p.estimate.overhead) + " · TL " + pct(p.estimate.profit ?? 0))}${kpi("Dự phòng", shortMoney(e.contingency), pct(p.estimate.contingency) + " × tổng trước dự phòng")}${kpi("Tổng dự toán", shortMoney(e.total), "Gồm thuế GTGT " + pct(p.estimate.vat))}</div>` +
       panel(
         "Bảng khối lượng & đơn giá",
         "Dữ liệu mẫu minh họa · bấm dòng để sửa",
         p.boq.length
-          ? `<div class="table-scroll"><table><thead><tr><th>Công tác</th><th>Gắn CV</th><th>ĐVT</th><th>Khối lượng</th><th>VL / đơn vị</th><th>NC / đơn vị</th><th>Máy / đơn vị</th><th>Thành tiền</th></tr></thead><tbody>${e.lines.map((i) => `<tr class="click-row" data-edit-boq="${escape(i.id)}"><td class="task-name">${escape(i.name)}</td><td>${escape(i.task) || "—"}</td><td>${escape(i.unit)}</td><td class="num">${fmt(i.qty, 2)}</td><td class="num">${fmt(i.material)}</td><td class="num">${fmt(i.labor)}</td><td class="num">${fmt(i.machine)}</td><td class="num"><strong>${money(i.total)}</strong></td></tr>`).join("")}</tbody></table></div>`
+          ? `<div class="table-scroll"><table><thead><tr><th>Công tác</th><th>Gắn CV</th><th>ĐVT</th><th>Khối lượng</th><th>VL / đơn vị</th><th>NC / đơn vị</th><th>Máy / đơn vị</th><th>Thành tiền</th></tr></thead><tbody>${e.lines.map((i) => `<tr class="click-row" data-edit-boq="${escape(i.id)}"><td class="task-name">${escape(i.name)}</td><td>${escape(i.task) || "—"}</td><td>${escape(i.unit)}</td><td class="num">${num(i.qty, 3)}</td><td class="num">${num(i.material)}</td><td class="num">${num(i.labor)}</td><td class="num">${num(i.machine)}</td><td class="num"><strong>${money(i.total)}</strong></td></tr>`).join("")}</tbody></table></div>`
           : empty(
               "Dự toán bắt đầu từ khối lượng",
               "Thêm công tác, đơn vị, khối lượng và ba thành phần đơn giá.",
@@ -786,14 +965,12 @@
         "Tổng hợp kinh phí",
         "Mô hình lập dự toán nội bộ",
         `<div class="panel-body">${[
-          ["Chi phí trực tiếp", e.direct],
-          [
-            "Chi phí chung (" + p.estimate.overhead + "% trực tiếp)",
-            e.overhead,
-          ],
+          ["Chi phí trực tiếp T", e.direct],
+          ["Chi phí chung C (" + pct(p.estimate.overhead) + " × T)", e.overhead],
+          ["Thu nhập chịu thuế tính trước TL (" + pct(p.estimate.profit ?? 0) + " × (T + C))", e.profit],
           ["Chi phí khác", e.other],
-          ["Dự phòng", e.contingency],
-          ["Thuế (" + p.estimate.vat + "% trước thuế)", e.vat],
+          ["Dự phòng (" + pct(p.estimate.contingency) + ")", e.contingency],
+          ["Thuế GTGT (" + pct(p.estimate.vat) + " × giá trước thuế)", e.vat],
         ]
           .map(
             ([k, v]) =>
@@ -817,11 +994,11 @@
     }
     return (
       heading(
-        "Biết chi phí. Chọn phương án.",
+        "Chi phí & tối ưu",
         "Theo dõi ngân sách, hiệu suất và đánh đổi giữa thời gian với chi phí.",
         `<button class="btn ghost" data-action="cost-settings">Cài đặt chi phí gián tiếp</button><button class="btn primary" data-action="optimize" id="optimize-btn">Phân tích rút ngắn ↗</button>`,
       ) +
-      `<div class="kpi-grid">${kpi("Ngân sách công việc", shortMoney(direct), "Chi phí trực tiếp đang nhập", "accent")}${kpi("Thực tế AC", shortMoney(ev.ac), "Cập nhật theo từng công việc")}${kpi("CPI · hiệu suất chi phí", ev.cpi === null ? "—" : fmt(ev.cpi, 2), "EV / AC · dưới 1 là kém kế hoạch", ev.cpi !== null && ev.cpi < 1 ? "danger" : "")}${kpi("SPI · hiệu suất tiến độ", ev.spi === null ? "—" : fmt(ev.spi, 2), "EV / PV · báo cáo cuối ngày " + p.statusDay, ev.spi !== null && ev.spi < 1 ? "danger" : "")}</div>` +
+      `<div class="kpi-grid">${kpi("Ngân sách công việc", shortMoney(direct), "Chi phí trực tiếp đang nhập", "accent")}${kpi("Thực tế AC", shortMoney(ev.ac), "Cập nhật theo từng công việc")}${kpi("CPI · hiệu suất chi phí", ev.cpi === null ? "—" : fmt(ev.cpi, 2), "EV / AC · dưới 1 là kém kế hoạch", ev.cpi !== null && ev.cpi < 1 ? "danger" : "")}${kpi("SPI · hiệu suất tiến độ", ev.spi === null ? "—" : fmt(ev.spi, 2), "EV / PV · báo cáo cuối ngày " + p.statusDay + (p.statusDay > 0 ? " (" + dateLabel(workDate(p, p.statusDay - 1)) + ")" : ""), ev.spi !== null && ev.spi < 1 ? "danger" : "")}</div>` +
       `<div class="grid-two equal-columns">${panel(
         "Giá trị đạt được · EVM",
         "PV dùng kế hoạch hiện tại, phân bổ tuyến tính theo thời lượng",
@@ -837,8 +1014,8 @@
           )
           .join(
             "",
-          )}<div class="stat-row total"><span>EAC = BAC / CPI</span><b>${ev.eac === null ? "Chưa đủ dữ liệu" : money(ev.eac)}</b></div><p class="form-caption">EAC giả định hiệu suất chi phí hiện tại tiếp tục. % hoàn thành được nhân với ngân sách, không thay thế biên bản nghiệm thu.</p></div>`,
-      )}${panel("Giả định rút ngắn tiến độ", "Tìm đầy đủ các tổ hợp trong phạm vi cho phép", `<div class="panel-body"><div class="stat-row"><span>Chi phí gián tiếp tại ${r.duration} ngày</span><b>${money(p.indirectBase)}</b></div><div class="stat-row"><span>Giảm chi phí gián tiếp / ngày</span><b>${money(p.dailySaving)}</b></div><div class="stat-row"><span>Tổng trước rút ngắn</span><b>${money(direct + p.indirectBase)}</b></div><p class="form-caption" style="margin-top:18px">Mỗi công việc có thời lượng tối thiểu và chi phí tăng thêm/ngày. Mỗi tổ hợp đều tính lại đường găng. Gián tiếp được chặn tại 0; bước rút ngắn là 1 ngày, tối đa 50.000 tổ hợp.</p><button class="text-link" style="margin-top:15px" data-action="sample-textbook">Thử bài mẫu trong tài liệu Word ↗</button></div>`)}</div>` +
+          )}<div class="stat-row total"><span>EAC = BAC / CPI</span><b>${ev.eac === null ? "Chưa đủ dữ liệu" : money(ev.eac)}</b></div>${[["ETC = EAC − AC · còn phải chi", ev.etc], ["VAC = BAC − EAC · chênh lệch khi hoàn thành", ev.vac], ["EAC nếu phần còn lại đúng ngân sách = AC + (BAC − EV)", ev.eacBudget], ["EAC theo CPI × SPI = AC + (BAC − EV) / (CPI × SPI)", ev.eacCpiSpi]].map(([k, v]) => `<div class="stat-row"><span>${k}</span><b>${v === null ? "—" : money(v)}</b></div>`).join("")}<div class="stat-row"><span>TCPI = (BAC − EV) / (BAC − AC)</span><b>${ev.tcpi === null ? "—" : fmt(ev.tcpi, 2)}</b></div><p class="form-caption">EAC giả định hiệu suất chi phí hiện tại tiếp tục; TCPI &gt; 1 nghĩa là phần việc còn lại phải hiệu quả hơn mới giữ được ngân sách. % hoàn thành được nhân với ngân sách, không thay thế biên bản nghiệm thu.</p></div>`,
+      )}${panel("Giả định rút ngắn tiến độ", "Tìm đầy đủ các tổ hợp trong phạm vi cho phép", `<div class="panel-body"><div class="stat-row"><span>Chi phí gián tiếp tại ${CT.schedule(p.tasks).duration} ngày (CPM theo thời lượng đang nhập)</span><b>${money(p.indirectBase)}</b></div><div class="stat-row"><span>Giảm chi phí gián tiếp / ngày</span><b>${money(p.dailySaving)}</b></div><div class="stat-row"><span>Tổng trước rút ngắn</span><b>${money(direct + p.indirectBase)}</b></div><p class="form-caption" style="margin-top:18px">Mỗi công việc có thời lượng tối thiểu và chi phí tăng thêm/ngày. Mỗi tổ hợp đều tính lại đường găng. Gián tiếp được chặn tại 0; bước rút ngắn là 1 ngày, tối đa 50.000 tổ hợp.</p><button class="text-link" style="margin-top:15px" data-action="sample-textbook">Thử bài mẫu trong tài liệu Word ↗</button></div>`)}</div>` +
       panel(
         "Các phương án thời gian–chi phí",
         optimization
@@ -855,19 +1032,36 @@
       )
     );
   }
+  /** Đường tổng / trực tiếp theo thời lượng; trục chi phí co theo dữ liệu để thấy được chênh lệch. */
   function costChart(rows) {
     if (rows.length < 2) return "";
-    const xs = rows.map((x) => x.duration),
-      max = Math.max(...rows.map((x) => x.total), 1),
-      lo = Math.min(...xs),
-      hi = Math.max(...xs),
-      x = (t) => 55 + ((t - lo) / (hi - lo)) * 730,
-      y = (v) => 155 - (v / max) * 130;
-    const line = (k) =>
-      rows
-        .map((r, i) => (i ? "L" : "M") + x(r.duration) + " " + y(r[k]))
-        .join(" ");
-    return `<svg class="finance-chart" viewBox="0 0 830 190" role="img" aria-label="Biểu đồ tổng chi phí theo thời lượng"><path d="M55 15V155H790" fill="none" stroke="#dce5d2"/><path d="${line("direct")}" fill="none" stroke="#a9bd91" stroke-width="2" stroke-dasharray="5 4"/><path d="${line("indirect")}" fill="none" stroke="#c4b38b" stroke-width="2"/><path d="${line("total")}" fill="none" stroke="#527940" stroke-width="2.5"/>${rows.map((r) => `<circle cx="${x(r.duration)}" cy="${y(r.total)}" r="4" fill="#fff" stroke="#527940"/><text x="${x(r.duration)}" y="175" text-anchor="middle" class="chart-label">${r.duration}n</text>`).join("")}<text x="60" y="11" class="chart-label">Tổng — xanh đậm · Trực tiếp — nét đứt · Gián tiếp — nâu</text></svg>`;
+    const sorted = [...rows].sort((a, b) => a.duration - b.duration);
+    const W = 830, H = 240, L = 92, R = 20, T = 22, B = 40;
+    const lo = sorted[0].duration, hi = sorted[sorted.length - 1].duration;
+    const values = sorted.flatMap((r) => [r.total, r.direct]);
+    let min = Math.min(...values), max = Math.max(...values);
+    const pad = Math.max((max - min) * 0.12, Math.abs(max) * 0.002, 1);
+    min -= pad;
+    max += pad;
+    const x = (t) => L + ((t - lo) / Math.max(1, hi - lo)) * (W - L - R);
+    const y = (v) => T + (1 - (v - min) / (max - min)) * (H - T - B);
+    const line = (k) => sorted.map((r, i) => (i ? "L" : "M") + x(r.duration).toFixed(1) + " " + y(r[k]).toFixed(1)).join(" ");
+    const best = sorted.reduce((a, b) => (b.total < a.total ? b : a));
+    const grid = [0, 0.25, 0.5, 0.75, 1]
+      .map((q) => {
+        const v = min + (max - min) * q;
+        return `<path d="M${L} ${y(v)}H${W - R}" class="chart-line"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end" class="chart-label">${shortMoney(v)}</text>`;
+      })
+      .join("");
+    const every = Math.max(1, Math.ceil(sorted.length / 14));
+    const points = sorted
+      .map((r, i) => {
+        const dot = `<circle cx="${x(r.duration)}" cy="${y(r.total)}" r="${r === best ? 6 : 4}" class="${r === best ? "chart-best" : "chart-point"}"><title>${r.duration} ngày · tổng ${money(r.total)} · trực tiếp ${money(r.direct)} · gián tiếp ${money(r.indirect)}</title></circle>`;
+        const tick = i % every === 0 || r === best ? `<text x="${x(r.duration)}" y="${H - 16}" text-anchor="middle" class="chart-label">${r.duration}n</text>` : "";
+        return dot + tick;
+      })
+      .join("");
+    return `<svg class="finance-chart cost-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Tổng chi phí và chi phí trực tiếp theo thời lượng">${grid}<path d="${line("direct")}" class="chart-series direct"/><path d="${line("total")}" class="chart-series total"/>${points}<text x="${x(best.duration)}" y="${y(best.total) - 12}" text-anchor="${x(best.duration) > W - 90 ? "end" : x(best.duration) < L + 60 ? "start" : "middle"}" class="chart-label strong">Thấp nhất ${best.duration}n</text><text x="${L}" y="12" class="chart-label">— Tổng chi phí   - - Chi phí trực tiếp · gián tiếp = tổng − trực tiếp (xem bảng)</text></svg>`;
   }
   function financeView() {
     const p = project(),
@@ -878,11 +1072,11 @@
       fvCompound = f.principal * Math.pow(1 + f.rate / 1200, f.months);
     return (
       heading(
-        "Dòng tiền hôm nay. Giá trị ngày mai.",
+        "Tài chính & lãi vay",
         "Tính lãi trên dư nợ giảm dần và phân tích dòng tiền với các giả định minh bạch.",
         `<button class="btn ghost" data-action="loan-csv">↓ Lịch trả nợ CSV</button>`,
       ) +
-      `<div class="kpi-grid">${kpi("Số tiền vay", shortMoney(f.principal), fmt(f.rate, 2) + "%/năm · " + f.months + " tháng", "accent")}${kpi("Tổng lãi vay", shortMoney(l.interest), "Lãi danh nghĩa năm / 12 mỗi tháng")}${kpi("NPV", shortMoney(a.npv), "Chiết khấu " + fmt(f.discount) + "% mỗi năm", a.npv < 0 ? "danger" : "")}${kpi("IRR", a.irr === null ? "—" : fmt(a.irr * 100, 2), a.irr === null ? "Xem điều kiện nghiệm bên dưới" : "Theo kỳ năm của dòng tiền", "", "%")}</div>` +
+      `<div class="kpi-grid">${kpi("Số tiền vay", shortMoney(f.principal), pct(f.rate) + "/năm · " + f.months + " tháng", "accent")}${kpi("Tổng lãi vay", shortMoney(l.interest), "Lãi danh nghĩa năm / 12 mỗi tháng")}${kpi("NPV", shortMoney(a.npv), "Chiết khấu " + pct(f.discount) + " mỗi năm", a.npv < 0 ? "danger" : "")}${kpi("IRR", a.irr === null ? "—" : fmt(a.irr * 100, 2), a.irr === null ? "Xem điều kiện nghiệm bên dưới" : "Theo kỳ năm của dòng tiền", "", "%")}</div>` +
       `<div class="grid-two equal-columns">${panel(
         "Vay vốn & lịch trả nợ",
         "Giải ngân một lần, trả cuối tháng, lãi suất cố định",
@@ -895,7 +1089,7 @@
             ["principal", "Gốc đều, lãi giảm dần"],
           ],
         )}<div class="field wide"><button class="btn primary" type="submit">Tính & lưu phương án vay ↗</button></div></form><p style="margin-top:18px" class="form-caption">Chưa gồm phí, bảo hiểm, ân hạn, lãi thả nổi hoặc quy ước số ngày thực tế của ngân hàng. Khoản cuối điều chỉnh sai số để dư nợ bằng 0.</p></div>`,
-      )}${panel("Hiệu quả đầu tư · NPV / IRR", "Dòng tiền ròng cách đều theo năm, phát sinh cuối kỳ", `<div class="panel-body"><form data-form="finance-flows" class="form-stack"><div class="field"><label>Dòng tiền từ kỳ 0, mỗi dòng một số</label><textarea name="flows" class="flow-input" required>${f.flows.join("\n")}</textarea><small>Kỳ 0 thường âm (vốn đầu tư). Kỳ 1 trở đi là thu − chi; nhập số thuần, không dùng dấu phân cách hàng nghìn.</small></div>${field("discount", "Suất chiết khấu (%/năm)", f.discount, "number", 'min="0" max="100" step="any"')}<button class="btn primary" type="submit">Phân tích dòng tiền ↗</button></form><p class="form-caption" style="margin-top:14px">${a.irrNote ? escape(a.irrNote) : "IRR là nghiệm làm NPV bằng 0. Dòng tiền hiện tại chỉ đổi dấu một lần."}</p><div class="stat-row"><span>Hoàn vốn giản đơn lần đầu</span><b>${a.payback === null ? "Chưa hoàn vốn" : fmt(a.payback, 2) + " năm"}</b></div></div>`)}</div>` +
+      )}${panel("Hiệu quả đầu tư · NPV / IRR", "Dòng tiền ròng cách đều theo năm, phát sinh cuối kỳ", `<div class="panel-body"><form data-form="finance-flows" class="form-stack"><div class="field"><label for="f-flows">Dòng tiền từ kỳ 0, mỗi dòng một số</label><textarea id="f-flows" name="flows" class="flow-input" required>${f.flows.map((v) => num(v, 2)).join("\n")}</textarea><small>Kỳ 0 thường âm (vốn đầu tư). Kỳ 1 trở đi là thu − chi. Nhập kiểu Việt Nam: -1.000.000.000 hoặc 2,5 (dấu phẩy thập phân).</small></div>${field("discount", "Suất chiết khấu (%/năm)", f.discount, "number", 'min="0" max="100" step="any"')}<button class="btn primary" type="submit">Phân tích dòng tiền ↗</button></form><p class="form-caption" style="margin-top:14px">${a.irrNote ? escape(a.irrNote) : "IRR là nghiệm làm NPV bằng 0. Dòng tiền hiện tại chỉ đổi dấu một lần."}</p><div class="stat-row"><span>Hoàn vốn giản đơn</span><b>${a.payback === null ? "Chưa hoàn vốn" : num(a.payback, 2) + " năm"}</b></div><div class="stat-row"><span>Hoàn vốn có chiết khấu</span><b>${a.discountedPayback === null ? "Chưa hoàn vốn" : num(a.discountedPayback, 2) + " năm"}</b></div><div class="stat-row"><span>Chỉ số sinh lời PI = PV thu / PV chi</span><b>${a.pi === null ? "—" : num(a.pi, 2)}</b></div></div>`)}</div>` +
       `<div class="grid-two equal-columns">${panel("Giá trị thời gian của tiền", "So sánh trên chính số tiền, lãi suất và thời hạn vay ở trên", `<div class="panel-body"><div class="stat-row"><span>FV lãi đơn · P × (1 + r × tháng/12)</span><b>${money(fvSimple)}</b></div><div class="stat-row"><span>FV lãi kép · P × (1 + r/12)<sup>tháng</sup></span><b>${money(fvCompound)}</b></div><div class="stat-row"><span>PV của khoản P nhận cuối kỳ</span><b>${money(f.principal / Math.pow(1 + f.rate / 1200, f.months))}</b></div><p class="form-caption" style="margin-top:15px">r ở công thức là lãi suất năm dạng thập phân. Đây là tích lũy không trả giữa kỳ; khác với lịch vay trả nợ hằng tháng.</p></div>`)}${panel("Tổng nghĩa vụ trả nợ", "Tách rõ gốc và lãi để tránh cộng trùng", `<div class="panel-body"><div class="stat-row"><span>Vốn gốc</span><b>${money(f.principal)}</b></div><div class="stat-row"><span>Tổng lãi</span><b>${money(l.interest)}</b></div><div class="stat-row total"><span>Tổng thanh toán</span><b>${money(l.total)}</b></div><div class="stat-row"><span>Thanh toán tháng đầu</span><b>${money(l.rows[0].payment)}</b></div><p class="form-caption">Các kịch bản vay, dòng tiền và dự toán được tính riêng. Chưa tự cộng lãi vay vào tổng dự toán; bạn quyết định khoản nào đưa vào dòng tiền dự án.</p></div>`)}</div>` +
       panel(
         "Lịch trả nợ chi tiết",
@@ -911,19 +1105,31 @@
       )
     );
   }
+  /** Cột dòng tiền theo kỳ; nhiều kỳ thì gộp nhóm, nhãn ghi đúng số kỳ thật. */
   function cashflowChart(flows) {
-    const shown =
-        flows.length <= 35
-          ? flows
-          : flows.filter((_, i) => i % Math.ceil(flows.length / 35) === 0),
-      max = Math.max(1, ...shown.map(Math.abs)),
-      bw = 700 / shown.length;
-    return `<svg class="finance-chart" viewBox="0 0 800 200" role="img" aria-label="Dòng tiền dương và âm theo kỳ"><path d="M45 100H765" stroke="#dfe6d5"/>${shown
-      .map((f, i) => {
-        const h = (Math.abs(f) / max) * 75;
-        return `<rect x="${50 + i * bw}" y="${f >= 0 ? 100 - h : 100}" width="${Math.max(2, bw * 0.6)}" height="${h}" rx="3" fill="${f >= 0 ? "#8da975" : "#c58d73"}"/><text x="${50 + i * bw + bw * 0.3}" y="190" text-anchor="middle" class="chart-label">${flows.indexOf(f) === -1 ? i : flows.length <= 35 ? i : i * Math.ceil(flows.length / 35)}</text><title>Kỳ ${i}: ${f}</title>`;
+    const group = Math.max(1, Math.ceil(flows.length / 40));
+    const bars = [];
+    for (let i = 0; i < flows.length; i += group) {
+      const part = flows.slice(i, i + group);
+      bars.push({ from: i, to: i + part.length - 1, value: part.reduce((s, v) => s + v, 0) });
+    }
+    const W = 800, H = 230, L = 70, R = 15, mid = 108, span = 82;
+    const max = Math.max(1, ...bars.map((b) => Math.abs(b.value))), bw = (W - L - R) / bars.length;
+    let running = 0;
+    const cum = bars.map((b) => (running += b.value));
+    const cmax = Math.max(1, ...cum.map(Math.abs));
+    const every = Math.max(1, Math.ceil(bars.length / 12));
+    const label = (b) => (b.from === b.to ? "Kỳ " + b.from : "Kỳ " + b.from + "–" + b.to);
+    const columns = bars
+      .map((b, i) => {
+        const h = (Math.abs(b.value) / max) * span, x = L + i * bw;
+        const rect = `<rect x="${x + bw * 0.2}" y="${b.value >= 0 ? mid - h : mid}" width="${Math.max(2, bw * 0.6)}" height="${Math.max(0.5, h)}" rx="2" class="${b.value >= 0 ? "bar-in" : "bar-out"}"><title>${label(b)}: ${money(b.value)} · lũy kế ${money(cum[i])}</title></rect>`;
+        const tick = i % every === 0 ? `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle" class="chart-label">${b.from}</text>` : "";
+        return rect + tick;
       })
-      .join("")}</svg>`;
+      .join("");
+    const cumulative = cum.map((v, i) => (i ? "L" : "M") + (L + i * bw + bw / 2).toFixed(1) + " " + (mid - (v / cmax) * span).toFixed(1)).join(" ");
+    return `<svg class="finance-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Dòng tiền dương và âm theo kỳ"><path d="M${L - 5} ${mid}H${W - R}" class="chart-axis"/><text x="${L - 10}" y="${mid - span + 4}" text-anchor="end" class="chart-label">${shortMoney(max)}</text><text x="${L - 10}" y="${mid + span + 4}" text-anchor="end" class="chart-label">${shortMoney(-max)}</text>${columns}<path d="${cumulative}" class="chart-series cumulative"/><text x="${L}" y="14" class="chart-label">Cột: dòng tiền ròng theo kỳ${group > 1 ? " (gộp " + group + " kỳ)" : ""} · đường: lũy kế (thang riêng)</text></svg>`;
   }
   function resourceDays(r) {
     if (!r.duration) return [];
@@ -950,7 +1156,7 @@
       owners = [...new Set(p.tasks.map((t) => t.owner || "Chưa phân công"))];
     return (
       heading(
-        "Đủ người. Đúng thời điểm.",
+        "Nguồn lực nhân công",
         "Nhu cầu nhân công của lịch đang áp dụng, giả định nhân lực cố định trong mỗi công việc.",
         `<button class="btn primary" data-action="settings">Cài đặt năng lực ↗</button>`,
       ) +
@@ -974,20 +1180,31 @@
       )
     );
   }
+  /** Biểu đồ nhân lực: cột theo ngày (gộp khi dài), đường năng lực và đường trung bình Rtb. */
   function resourceChart(days, capacity) {
-    if (!days.length)
-      return '<p class="form-caption">Chưa có dữ liệu nhân công.</p>';
-    const max = Math.max(capacity, ...days.map((d) => d.people), 1),
-      bin = Math.ceil(days.length / 60),
-      bins = [];
+    if (!days.length) return '<p class="form-caption">Chưa có dữ liệu nhân công.</p>';
+    const peak = Math.max(...days.map((d) => d.people), 0);
+    // Trục tung tròn số (bội 5/10/20…) để đọc nhanh.
+    const raw = Math.max(capacity, peak, 1) * 1.08, unit = raw <= 20 ? 5 : raw <= 60 ? 10 : raw <= 200 ? 20 : 50;
+    const max = Math.ceil(raw / unit) * unit;
+    const average = days.reduce((s, d) => s + d.people, 0) / days.length;
+    const bin = Math.ceil(days.length / 80), bins = [];
     for (let i = 0; i < days.length; i += bin)
-      bins.push({
-        day: i,
-        people: Math.max(...days.slice(i, i + bin).map((d) => d.people)),
-      });
-    const bw = 725 / bins.length,
-      y = (v) => 210 - (v / max) * 170;
-    return `<svg class="resource-chart" viewBox="0 0 800 250" role="img" aria-label="Biểu đồ nhân công theo ngày làm việc">${[0, 0.25, 0.5, 0.75, 1].map((q) => `<path d="M45 ${y(q * max)}H775" class="chart-line"/><text x="35" y="${y(q * max) + 3}" text-anchor="end" class="chart-label">${fmt(q * max)}</text>`).join("")}${bins.map((d, i) => `<rect x="${48 + i * bw}" y="${y(d.people)}" width="${Math.max(1, bw * 0.68)}" height="${210 - y(d.people)}" rx="2" fill="${d.people > capacity ? "#c38e73" : "#9ab67d"}"><title>Ngày ${d.day + 1}${bin > 1 ? "–" + Math.min(days.length, d.day + bin) : ""}: ${d.people} người</title></rect>${i % Math.max(1, Math.ceil(bins.length / 10)) === 0 ? `<text x="${48 + i * bw}" y="231" class="chart-label">${d.day + 1}</text>` : ""}`).join("")}<path d="M45 ${y(capacity)}H775" stroke="#b38b53" stroke-width="1.5" stroke-dasharray="5 4"/><text x="775" y="${y(capacity) - 5}" text-anchor="end" class="chart-label">Năng lực ${capacity}</text></svg>`;
+      bins.push({ day: i, last: Math.min(days.length, i + bin) - 1, people: Math.max(...days.slice(i, i + bin).map((d) => d.people)) });
+    const W = 800, H = 260, L = 46, R = 14, T = 16, B = 34;
+    const bw = (W - L - R) / bins.length, y = (v) => T + (1 - v / max) * (H - T - B);
+    const every = Math.max(1, Math.ceil(bins.length / 12));
+    const ticks = [0, 0.25, 0.5, 0.75, 1]
+      .map((q) => `<path d="M${L} ${y(q * max)}H${W - R}" class="chart-line"/><text x="${L - 6}" y="${y(q * max) + 4}" text-anchor="end" class="chart-label">${num(q * max, 0)}</text>`)
+      .join("");
+    const bars = bins
+      .map((d, i) => {
+        const rect = `<rect x="${L + i * bw + bw * 0.1}" y="${y(d.people)}" width="${Math.max(1, bw * 0.8)}" height="${Math.max(0, H - B - y(d.people))}" rx="1.5" class="${d.people > capacity + 1e-9 ? "bar-over" : "bar-crew"}"><title>Ngày ${d.day + 1}${d.last > d.day ? "–" + (d.last + 1) : ""}: ${num(d.people, 1)} người</title></rect>`;
+        const tick = i % every === 0 ? `<text x="${L + i * bw + bw / 2}" y="${H - 14}" text-anchor="middle" class="chart-label">${d.day + 1}</text>` : "";
+        return rect + tick;
+      })
+      .join("");
+    return `<svg class="resource-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Biểu đồ nhân công theo ngày làm việc, đỉnh ${num(peak)} người, trung bình ${num(average, 1)} người">${ticks}${bars}<path d="M${L} ${y(capacity)}H${W - R}" class="chart-capacity"/><text x="${W - R}" y="${y(capacity) - 6}" text-anchor="end" class="chart-label strong">Năng lực ${num(capacity)}</text><path d="M${L} ${y(average)}H${W - R}" class="chart-average"/><text x="${L + 4}" y="${y(average) - 6}" class="chart-label">Rtb ${num(average, 1)}</text><text x="${W - R}" y="${H - 1}" text-anchor="end" class="chart-label">Ngày làm việc${bin > 1 ? " (mỗi cột " + bin + " ngày, lấy mức cao nhất)" : ""}</text></svg>`;
   }
   function riskView() {
     const p = project(),
@@ -995,7 +1212,7 @@
       high = active.filter((x) => x.probability * x.impact >= 15).length;
     return (
       heading(
-        "Nhận diện sớm. Ứng phó chủ động.",
+        "Quản lý rủi ro",
         "Sổ rủi ro, người chịu trách nhiệm và phương án ứng phó.",
         `<button class="btn primary" data-action="add-risk">+ Thêm rủi ro</button>`,
       ) +
@@ -1004,7 +1221,8 @@
         "Danh mục rủi ro",
         "Bấm một rủi ro để cập nhật",
         p.risks.length
-          ? `<div class="table-scroll"><table><thead><tr><th>Rủi ro</th><th>Điểm</th><th>Phụ trách</th><th>Trạng thái</th></tr></thead><tbody>${p.risks
+          ? `<div class="table-scroll"><table><thead><tr><th>Rủi ro</th><th>Điểm</th><th>Phụ trách</th><th>Trạng thái</th></tr></thead><tbody>${[...p.risks]
+              .sort((a, b) => (a.status === "Đã đóng") - (b.status === "Đã đóng") || b.probability * b.impact - a.probability * a.impact)
               .map((x) => {
                 const score = x.probability * x.impact;
                 return `<tr class="click-row" data-edit-risk="${escape(x.id)}"><td class="task-name">${escape(x.name)}</td><td><span class="badge ${score >= 15 ? "critical" : score >= 8 ? "warning" : ""}">${x.probability} × ${x.impact} = ${score}</span></td><td>${escape(x.owner) || "—"}</td><td>${escape(x.status)}</td></tr>`;
@@ -1043,7 +1261,7 @@
       owners = [...new Set(p.tasks.map((t) => t.owner).filter(Boolean))];
     return (
       heading(
-        "Cùng một nền dữ liệu.",
+        "Thành viên & lịch sử",
         "Phân công rõ đầu mối, theo dõi thay đổi và quyền truy cập.",
         `${team?'<button class="btn ghost" data-action="create-invite">Mời tham gia</button>':''}<button class="btn primary" data-action="team-connect">${team ? "Quản lý tài khoản" : "Kết nối không gian chung"} ↗</button>`,
       ) +
@@ -1052,7 +1270,7 @@
         : '<div class="callout">Đã đăng nhập <strong>' +
           escape(team.name) +
           "</strong>. Quyền tại dự án hiện tại: " +
-          escape(p._role || "owner") +
+          escape({ owner: "chủ dự án", editor: "chỉnh sửa", commenter: "xem và bình luận", viewer: "chỉ xem" }[p._role || "owner"] || p._role) +
           ". Thay đổi được đồng bộ khi bấm lưu.</div>") +
       `<div class="grid-two equal-columns">${panel("Người phụ trách trong kế hoạch", "Giao người phụ trách trong biểu mẫu công việc", `<div class="panel-body">${owners.length ? owners.map((o) => `<div class="member-row"><span><i class="avatar" style="font-style:normal;display:grid;place-items:center">${escape(o.split(" ").slice(-1)[0].slice(0, 2).toUpperCase())}</i>${escape(o)}</span><span class="badge neutral">${p.tasks.filter((t) => t.owner === o).length} công việc</span></div>`).join("") : '<p class="form-caption">Chưa có người phụ trách được gắn vào công việc.</p>'}${team ? '<button style="margin-top:20px" class="btn ghost small" data-action="members">Quản lý quyền dự án ↗</button>' : ""}</div>`)}${panel("Nhật ký cập nhật", "Tối đa 100 mục gần nhất trong bản dữ liệu dự án", historyHTML(p.history))}</div>` + (latestInvite?.projectId===p.id?`<section class="panel"><div class="panel-body"><h3>Liên kết mời · ${escape(latestInvite.role)}</h3><input class="invite-link" value="${escape(latestInvite.url)}" readonly aria-label="Liên kết mời"><button class="btn ghost small" data-action="copy-invite">Sao chép liên kết</button><p class="form-caption">Hiệu lực tới ${new Date(latestInvite.expires).toLocaleString("vi-VN",{timeZone:"Asia/Bangkok"})}. Người nhận cần truy cập được cùng máy chủ; địa chỉ 127.0.0.1 chỉ dùng trên máy đang chạy ứng dụng.</p></div></section>`:"") + commentsHTML()
     );
@@ -1062,7 +1280,7 @@
   function printView(){return heading('In & xuất báo cáo','Chọn một hoặc nhiều mục. Tải PDF, ảnh, sao chép ảnh hoặc mở hộp thoại in.')+`<section class="panel"><div class="panel-head"><div><h2>Nội dung muốn xuất</h2><p>${escape(project().name)}</p></div><div class="panel-tools"><button class="btn ghost small" data-action="print-select-all">Chọn tất cả</button><button class="btn ghost small" data-action="print-clear">Bỏ chọn</button></div></div><div class="panel-body"><div class="print-choices">${printItems.map(([id,label])=>`<label><input type="checkbox" data-print-section="${id}" ${printSelected.has(id)?'checked':''}><span>${label}</span></label>`).join('')}</div><div class="export-actions">${[['print','In các mục đã chọn'],['pdf','Tải PDF'],['png','Xuất ảnh PNG'],['clipboard','Sao chép ảnh']].map(([format,label])=>`<button class="btn ${format==='pdf'?'primary':'ghost'}" data-export-format="${format}" ${exporting?'disabled':''}>${label}</button>`).join('')}</div><p class="form-caption">Nhiều ảnh được gói thành một ZIP. PDF khổ A4 ngang; mục dài được chia trang. Ảnh sao chép gồm các mục đã chọn. In dùng trình duyệt để chọn máy in hoặc lưu PDF.</p><p class="form-caption" role="status" id="export-status"></p></div></section>`;}
   async function printSectionHTML(key){const beforeSearch=search,beforeCritical=criticalOnly;search='';criticalOnly=false;try{return await renderPrintSection(key);}finally{search=beforeSearch;criticalOnly=beforeCritical;}}
   async function renderPrintSection(key){
-    const r=calc();if(key==='costs'&&project().id==='nhom-quan-ly-du-an'){const old=optimization;try{optimization=CT.optimize(project().tasks,project().indirectBase,project().dailySaving);return costsView();}finally{optimization=old;}}if(key==='gantt')return heading('Biểu đồ Gantt','Lịch đang áp dụng')+panel('Tiến độ',r.duration+' ngày làm việc',gantt(r));
+    const r=calc();if(key==='costs'&&['nhom-quan-ly-du-an','bai-tap-a-k'].includes(project().id)){const old=optimization;try{optimization=CT.optimize(project().tasks,project().indirectBase,project().dailySaving);return costsView();}finally{optimization=old;}}if(key==='gantt')return heading('Biểu đồ Gantt','Lịch đang áp dụng')+panel('Tiến độ',r.duration+' ngày làm việc',gantt(r));
     if(key==='cpm'){const old=scheduleTab,oldSearch=search,oldCritical=criticalOnly;scheduleTab='cpm';search='';criticalOnly=false;const html=scheduleView();scheduleTab=old;search=oldSearch;criticalOnly=oldCritical;return html;}
     if(key==='planning'){const d=planningDraft();if(!d.report)throw Error('Chưa có phương án xếp lịch. Giải một phương án trước khi chọn mục này.');return planningReportView(d);}
     if(key==='model'){
@@ -1105,7 +1323,7 @@
   function guideView() {
     return (
       heading(
-        "Đằng sau mỗi con số.",
+        "Hướng dẫn & cơ sở tính",
         "Cơ sở tính, phạm vi bản chạy thử và những hướng phát triển đã nghiên cứu.",
       ) +
       `<div class="guide-grid">${panel("FS / SS / FF / SF", "Ràng buộc tối thiểu; lag có thể âm hoặc dương", `<div class="panel-body"><div class="stat-row"><span>FS · kết thúc → bắt đầu</span><b>Sj ≥ Si + Di + lag</b></div><div class="stat-row"><span>SS · bắt đầu → bắt đầu</span><b>Sj ≥ Si + lag</b></div><div class="stat-row"><span>FF · kết thúc → kết thúc</span><b>Sj ≥ Si + Di − Dj + lag</b></div><div class="stat-row"><span>SF · bắt đầu → kết thúc</span><b>Sj ≥ Si − Dj + lag</b></div><p class="form-caption" style="margin-top:18px">Ví dụ <code>A:FS+2, B:SS-1</code>. “A” đứng riêng mặc định FS+0. SF ít dùng; có thể mô tả một ca trực chỉ kết thúc sau khi ca thay thế bắt đầu. Không tự diễn giải SS/FF thành FS.</p></div>`)}${panel("CPM & lịch làm việc", "Các công việc có thời lượng xác định, không chia đoạn", `<div class="panel-body"><p>ES/EF: bắt đầu/kết thúc sớm. LS/LF: bắt đầu/kết thúc muộn. TF = LS − ES. Công việc găng có TF = 0; quan hệ găng phải chặt và nối hai công việc găng.</p><div class="formula">ESj = max(0, ESi + wij)<br>T = max(ESi + Di)<br>LSi = min(T − Di, LSj − wij)<br>TF = LS − ES</div><p>Toàn bộ công việc dùng một lịch tuần. Mốc 0 là đầu ngày làm việc đầu tiên. Thời lượng, lag và rút ngắn đều là số nguyên ngày làm việc; chưa hỗ trợ giờ, ngày lễ hay lịch riêng từng tổ đội. Không cho quan hệ vòng, kể cả vòng có thể khả thi về mặt đại số.</p></div>`)}${panel("Dự toán & tài chính", "Giả định luôn nằm cạnh thông số nhập", `<div class="panel-body"><p>Dự toán = trực tiếp + chung + khác + dự phòng + thuế. Trực tiếp = Σ khối lượng × (đơn giá vật liệu + nhân công + máy). Dự phòng tính trên trực tiếp + chung + khác; thuế theo tỷ lệ nhập trên tổng trước thuế.</p><div class="formula">NPV = Σ CFt / (1 + r)<sup>t</sup><br>IRR: tìm r để NPV = 0<br>Lãi tháng = dư nợ đầu tháng × lãi năm / 12</div><p>Suất chiết khấu của dòng tiền là lãi hiệu dụng theo năm. Lãi vay nhập là lãi danh nghĩa năm chia 12. Dữ liệu cùng một loại tiền; ứng dụng không tự đổi ngoại tệ. Dự toán hiện là mô hình nội bộ, chưa phải hồ sơ dự toán theo định mức pháp lý.</p></div>`)}${panel("Từ slide đến mô phỏng", "Các tài liệu bạn cung cấp được dùng làm cơ sở chuyên môn", `<div class="panel-body"><ul class="document-list"><li>CI5405 · C2, trang 25: chuẩn bị ngoài trước trong sau; ngầm trước nổi; kết cấu dưới lên, hoàn thiện trên xuống.</li><li>CI5405 · C3, trang 17, 24: trình tự công tác móng và gián đoạn công nghệ. Mẫu 3D thể hiện các giai đoạn tổng quát.</li><li>CI5405 · C4, trang 17–21 và 51–58; CI5407 · C5, trang 17–19, 23–24, 47–50: mạng AON, quan hệ, đường găng và thời gian–chi phí.</li><li>CI5407 · C3: giá trị theo thời gian của tiền; C6: nhu cầu nguồn lực; C7: EVM; C10: nhận dạng và ứng phó rủi ro.</li><li>Dữ liệu QLDA.docx: bài A–G, 25 ngày / trực tiếp 450 USD. Tìm kiếm đầy đủ tái hiện phương án 22 ngày / tổng 775 USD.</li></ul></div>`)}</div>` +
@@ -1143,11 +1361,32 @@
       result.append(key.startsWith("nen_") ? key.slice(4) : key, value);
     return result;
   }
+  const FIELD_LABELS = {
+    duration: "Thời lượng", progress: "% hoàn thành", workers: "Nhân công", cost: "Ngân sách trực tiếp",
+    actualCost: "Chi phí thực tế", minDuration: "Thời lượng tối thiểu", crashSlope: "Chi phí tăng / ngày rút ngắn",
+    stage: "Giai đoạn", pertA: "Ước lượng lạc quan a", pertM: "Ước lượng khả dĩ m", pertB: "Ước lượng bi quan b",
+    segment: "Phân đoạn", qty: "Khối lượng", material: "Đơn giá vật liệu", labor: "Đơn giá nhân công",
+    machine: "Đơn giá máy", probability: "Xác suất", impact: "Tác động", statusDay: "Ngày báo cáo",
+    capacity: "Năng lực nhân công", principal: "Số tiền vay", rate: "Lãi suất", months: "Thời hạn",
+    discount: "Suất chiết khấu", overhead: "Chi phí chung", other: "Chi phí khác", contingency: "Dự phòng",
+    vat: "Thuế GTGT", profit: "Thu nhập chịu thuế tính trước", indirectBase: "Chi phí gián tiếp", dailySaving: "Giảm gián tiếp/ngày",
+  };
   function formNumber(f, k) {
-    const value = f.get(k);
-    if (value === null || !String(value).trim())
-      throw new Error("Chưa nhập " + k + ".");
-    return Number(value);
+    const value = f.get(k), label = FIELD_LABELS[k] || k;
+    if (value === null || !String(value).trim()) throw new Error("Chưa nhập " + label.toLowerCase() + ".");
+    const n = Number(value);
+    if (!Number.isFinite(n)) throw new Error(label + ": cần nhập số.");
+    return n;
+  }
+  /** "30/04/2027" hoặc "2027-04-30", mỗi dòng/dấu phẩy một ngày → danh sách ISO, đã sắp xếp. */
+  function parseHolidayList(text) {
+    const days = text.split(/[\n,;]+/).map((s) => s.trim()).filter(Boolean).map((s) => {
+      const vn = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      const iso = vn ? vn[3] + "-" + vn[2].padStart(2, "0") + "-" + vn[1].padStart(2, "0") : s;
+      CT.parseHolidays([iso]);
+      return iso;
+    });
+    return [...new Set(days)].sort();
   }
   function modal(
     title,
@@ -1177,7 +1416,7 @@
       throw new Error("Tên dự án cần từ 1–160 ký tự.");
     if (!["VND", "USD"].includes(p.currency))
       throw new Error("Đơn vị tiền phải là VND hoặc USD.");
-    CT.dateAt(p.start, 0, p.workdays);
+    CT.dateAt(p.start, 0, p.workdays, p.holidays);
     CT.number(p.statusDay, "Ngày báo cáo", 0, 100000, true);
     CT.number(p.capacity, "Năng lực nhân công", 0, 100000, true);
     CT.number(p.indirectBase, "Chi phí gián tiếp");
@@ -1356,6 +1595,8 @@
               "crashSlope",
               "stage",
             ].forEach((k) => (next[k] = formNumber(f, k)));
+            // Giảm thời lượng thì thời lượng tối thiểu đi theo, tránh lỗi "tối thiểu > thời lượng" khó hiểu.
+            if (next.minDuration > next.duration) next.minDuration = next.duration;
             if(!t.pert&&!$("#f-pertA").closest("details")?.dataset.edited)delete next.pert;
             if (existing) p.tasks[p.tasks.findIndex((x) => x.id === id)] = next;
             else p.tasks.push(next);
@@ -1369,7 +1610,7 @@
     $("#f-owner").required = false;
     $("#f-process").required=false;
   }
-  async function deleteProject(){const target=copy(project());if(team&&target._role!=='owner')throw Error('Chỉ chủ dự án được xóa dự án.');modal('Xóa dự án',`<p>Bạn sắp xóa <strong>${escape(target.name)}</strong> với ${target.tasks.length} công tác.</p><p class="form-caption">Dự án sẽ được đưa vào mục đã xóa. Bạn có thể khôi phục lại.</p>`,async()=>{if(team){await api('/api/projects/'+encodeURIComponent(target.id),'DELETE',{version:target._version});await loadTeam(team);}else{db.deletedRecords=[{project:target,deletedAt:Date.now()},...(db.deletedRecords||[])].slice(0,20);db.deletedSamples??=[];if(!db.deletedSamples.includes(target.id))db.deletedSamples.push(target.id);db.projects=db.projects.filter(p=>p.id!==target.id);if(!db.projects.length)db.projects.push(Samples.empty());db.selected=db.projects[0].id;save();}optimization=null;page='overview';history.replaceState(null,'',location.pathname);render();toast('Đã xóa '+target.name+'. Có thể khôi phục trong Dự án đã xóa.');},'Xóa dự án');}
+  async function deleteProject(){const target=copy(project());if(team&&target._role!=='owner')throw Error('Chỉ chủ dự án được xóa dự án.');modal('Xóa dự án',`<p>Bạn sắp xóa <strong>${escape(target.name)}</strong> với ${target.tasks.length} công tác.</p><p class="form-caption">Dự án sẽ được đưa vào mục đã xóa. Bạn có thể khôi phục lại${team ? " trong 30 ngày" : ""}.</p>`,async()=>{if(team){await api('/api/projects/'+encodeURIComponent(target.id),'DELETE',{version:target._version});await loadTeam(team);}else{db.deletedRecords=[{project:target,deletedAt:Date.now()},...(db.deletedRecords||[])].slice(0,20);db.deletedSamples??=[];if(!db.deletedSamples.includes(target.id))db.deletedSamples.push(target.id);db.projects=db.projects.filter(p=>p.id!==target.id);if(!db.projects.length)db.projects.push(Samples.empty());db.selected=db.projects[0].id;save();}optimization=null;page='overview';history.replaceState(null,'',location.pathname);render();toast('Đã xóa '+target.name+'. Có thể khôi phục trong Dự án đã xóa.');},'Xóa dự án');}
   async function deletedProjectsModal(){const records=team?(await api('/api/deleted-projects')).projects.map(p=>({project:p,deletedAt:p.deletedAt})):(db.deletedRecords||[]);modal('Dự án đã xóa',records.length?records.map(item=>`<div class="member-row"><span>${escape(item.project.name)}</span><button type="button" class="btn ghost small" data-restore-project="${escape(item.project.id)}">Khôi phục</button></div>`).join(''):'<p class="form-caption">Chưa có dự án đã xóa.</p>',()=>{},'Đóng');}
   async function restoreProject(id){if(team){await api('/api/projects/'+encodeURIComponent(id)+'/restore','POST',{});await loadTeam(team);db.selected=id;}else{const entry=db.deletedRecords?.find(e=>e.project.id===id);if(!entry)throw Error('Không tìm thấy dự án đã xóa.');if(db.projects.length>=100)throw Error('Tối đa 100 dự án.');db.projects.push(entry.project);db.selected=id;db.deletedRecords=db.deletedRecords.filter(e=>e.project.id!==id);db.deletedSamples=(db.deletedSamples||[]).filter(x=>x!==id);save();}$('#modal').close();page='overview';render();toast('Đã khôi phục dự án.');}
   function settingsModal() {
@@ -1399,15 +1640,17 @@
         )
         .join(
           "",
-        )}</div><small>Nếu ngày khởi công rơi vào ngày nghỉ, mốc 0 chuyển đến ngày làm việc tiếp theo. Chưa trừ lễ.</small></div>${field("statusDay", "Báo cáo tại cuối ngày thứ", p.statusDay, "number", 'min="0" max="100000" step="1"')}${field("capacity", "Năng lực nhân công (người/ngày)", p.capacity, "number", 'min="0" max="100000" step="1"')}</div><p class="form-caption" style="margin-top:20px">Đổi loại tiền chỉ thay đơn vị hiển thị, không tự quy đổi các số tiền. Hãy nhập lại đơn giá và các giá trị nếu cần.</p><div class="edit-delete"><button type="button" class="btn ghost small" data-action="deleted-projects">Dự án đã xóa</button><button type="button" class="btn danger small" data-action="delete-project" ${team&&p._role!=="owner"?"disabled":""}>Xóa dự án</button></div>`,
+        )}</div><small>Nếu ngày khởi công rơi vào ngày nghỉ, mốc 0 chuyển đến ngày làm việc tiếp theo.</small></div>${textareaField("holidays", "Ngày nghỉ lễ (mỗi dòng một ngày, dd/mm/yyyy)", (p.holidays || []).map(dateLabel).join("\n"), "Ví dụ 01/01/2027, 30/04/2027, 01/05/2027, 02/09/2027 và các ngày Tết theo lịch thực tế. Ngày lễ không tính là ngày làm việc.")}${field("statusDay", "Báo cáo tại cuối ngày thứ", p.statusDay, "number", 'min="0" max="100000" step="1"')}${field("capacity", "Năng lực nhân công (người/ngày)", p.capacity, "number", 'min="0" max="100000" step="1"')}</div><p class="form-caption" style="margin-top:20px">Đổi loại tiền chỉ thay đơn vị hiển thị, không tự quy đổi các số tiền. Hãy nhập lại đơn giá và các giá trị nếu cần.</p><div class="edit-delete"><button type="button" class="btn ghost small" data-action="deleted-projects">Dự án đã xóa</button><button type="button" class="btn danger small" data-action="delete-project" ${team&&p._role!=="owner"?"disabled":""}>Xóa dự án</button></div>`,
       (f) =>
         commit((p) => {
           p.name = String(f.get("name")).trim();
           p.start = String(f.get("start"));
           p.currency = String(f.get("currency"));
           p.workdays = f.getAll("workdays").map(Number);
+          p.holidays = parseHolidayList(String(f.get("holidays") || ""));
           p.statusDay = formNumber(f, "statusDay");
           p.capacity = formNumber(f, "capacity");
+          if (p.planning) p.planning.capacity = p.capacity;
         }, "Đã lưu cài đặt dự án"),
     );
   }
@@ -1530,6 +1773,7 @@
   }
   async function loadTeam(user) {
     team = user;
+    graphDrafts.clear();
     const invitation=new URLSearchParams(location.search).get('invite');let joinedId;
     if(invitation){try{const joined=await api('/api/invites/'+encodeURIComponent(invitation),'POST',{});joinedId=joined.projectId;history.replaceState(null,'',location.pathname);}catch(error){toast(error.message,true);}}
     const projects = await api("/api/projects");
@@ -1580,7 +1824,7 @@
     const setup = me.setup;
     modal(
       setup ? "Tạo tài khoản quản trị" : "Đăng nhập không gian chung",
-      `<div class="team-login">${setup ? field("name", "Họ tên", "", "text", 'maxlength="120"') : ""}${field("email", "Email", "", "email", 'maxlength="160" autocomplete="username"')}${field("password", "Mật khẩu", "", "password", 'minlength="10" maxlength="128" autocomplete="' + (setup ? "new-password" : "current-password") + '"')}<p class="form-caption">${setup ? "Tài khoản đầu tiên quản trị không gian. Sau đó quản trị có thể tạo tài khoản cho thành viên trong mục quyền dự án." : "Tài khoản được quản trị tạo trong không gian chung. Tối thiểu 10 ký tự cho mật khẩu."}</p></div>`,
+      `<div class="team-login">${setup && me.setupTokenRequired ? field("setupToken", "Mã thiết lập (in trong cửa sổ Terminal của máy chủ)", "", "text", 'maxlength="200" autocomplete="off"') : ""}${setup ? field("name", "Họ tên", "", "text", 'maxlength="120"') : ""}${field("email", "Email", "", "email", 'maxlength="160" autocomplete="username"')}${field("password", "Mật khẩu", "", "password", 'minlength="10" maxlength="128" autocomplete="' + (setup ? "new-password" : "current-password") + '"')}<p class="form-caption">${setup ? "Tài khoản đầu tiên quản trị không gian. Sau đó quản trị có thể tạo tài khoản cho thành viên trong mục quyền dự án." : "Tài khoản được quản trị tạo trong không gian chung. Tối thiểu 10 ký tự cho mật khẩu."}</p></div>`,
       async (f) => {
         const response = await api(
           setup ? "/api/setup" : "/api/login",
@@ -1600,10 +1844,12 @@
       data = await api(
         "/api/projects/" + encodeURIComponent(p.id) + "/members",
       ),
-      users = await api("/api/users");
+      users = await api("/api/users"),
+      invites = p._role === "owner" ? (await api("/api/projects/" + encodeURIComponent(p.id) + "/invites").catch(() => ({ invites: [] }))).invites : [];
+    const roleName = { owner: "Chủ dự án", editor: "Chỉnh sửa", commenter: "Bình luận", viewer: "Chỉ xem" };
     modal(
       "Quyền truy cập dự án",
-      `<div>${data.members.map((m) => `<div class="member-row"><span>${escape(m.name)}<small class="muted" style="margin-left:8px">${escape(m.email)}</small></span><span class="badge">${escape(m.role)}</span></div>`).join("")}</div><p class="team-roles" style="margin:15px 0 25px">owner: quản lý quyền · editor: sửa và bình luận · commenter: xem và bình luận · viewer: chỉ đọc. Gán lại vai trò để thay quyền. Chủ dự án gốc luôn giữ quyền owner.</p><div class="form-grid">${selectField(
+      `<div>${data.members.map((m) => `<div class="member-row"><span>${escape(m.name)}<small class="muted" style="margin-left:8px">${escape(m.email)}</small></span><span><span class="badge">${escape(roleName[m.role] || m.role)}</span>${p._role === "owner" || m.id === team.id ? ` <button type="button" class="btn ghost small" data-remove-member="${m.id}">${m.id === team.id ? "Rời dự án" : "Gỡ"}</button>` : ""}</span></div>`).join("")}</div>${invites.length ? `<h3 style="margin:20px 0 8px">Lời mời chưa dùng</h3>${invites.map((i) => `<div class="member-row"><span>${escape(roleName[i.role] || i.role)} · tạo bởi ${escape(i.creator)}<small class="muted" style="margin-left:8px">hết hạn ${new Date(i.expires).toLocaleString("vi-VN", { timeZone: "Asia/Bangkok" })}</small></span><button type="button" class="btn ghost small" data-revoke-invite="${escape(i.id)}">Thu hồi</button></div>`).join("")}` : ""}<p class="team-roles" style="margin:15px 0 25px">owner: quản lý quyền · editor: sửa và bình luận · commenter: xem và bình luận · viewer: chỉ đọc. Gán lại vai trò để thay quyền. Chủ dự án gốc luôn giữ quyền owner.</p><div class="form-grid">${selectField(
         "userId",
         "Tài khoản",
         users.users[0]?.id,
@@ -1677,12 +1923,16 @@
             ["VND", "VND"],
             ["USD", "USD"],
           ],
-        )}${field("start", "Ngày khởi công", "2026-10-19", "date", 'min="1900-01-01" max="2200-12-31"')}</div>`,
+        )}${field("start", "Ngày khởi công", new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10), "date", 'min="1900-01-01" max="2200-12-31"')}</div>`,
         async (f) => {
           const p = Samples.empty();
           p.name = String(f.get("name")).trim();
           p.start = String(f.get("start"));
           p.currency = String(f.get("currency"));
+          if (p.currency === "USD") {
+            // Mặc định tài chính của mẫu tính theo VND; đổi về quy mô USD để không ra "500.000.000 USD".
+            p.finance = { ...p.finance, principal: 20000, flows: [-40000, 14000, 16000, 18000] };
+          }
           await addProject(p);
         },
         "Tạo dự án ↗",
@@ -1705,21 +1955,24 @@
       exportCSV(
         "nen-tien-do.csv",
         [
-          "Ma",
-          "Cong viec",
-          "Thoi luong",
-          "Quan he",
-          "Phu trach",
-          "Ngan sach",
-          "Thuc te",
-          "Hoan thanh %",
-          "Nhan cong",
+          "Mã",
+          "Công việc",
+          "Thời lượng (ngày)",
+          "Quan hệ trước",
+          "Phụ trách",
+          "Ngân sách " + project().currency,
+          "Thực tế " + project().currency,
+          "Hoàn thành %",
+          "Nhân công (người/ngày)",
           "ES",
           "EF",
           "LS",
           "LF",
           "TF",
-          "Du tru rieng",
+          "Dự trữ riêng",
+          "Găng",
+          "Ngày bắt đầu",
+          "Ngày kết thúc",
         ],
         r.rows.map((t) => [
           t.id,
@@ -1737,6 +1990,9 @@
           t.lf,
           t.tf,
           t.ff,
+          t.critical ? "Có" : "Không",
+          dateLabel(workDate(project(), t.es)),
+          dateLabel(workDate(project(), Math.max(t.es, t.ef - 1))),
         ]),
       );
     },
@@ -1744,14 +2000,14 @@
       exportCSV(
         "nen-du-toan.csv",
         [
-          "Cong tac",
-          "Ma CV",
-          "DVT",
-          "Khoi luong",
-          "VL",
-          "NC",
-          "May",
-          "Thanh tien",
+          "Công tác",
+          "Mã công việc",
+          "Đơn vị",
+          "Khối lượng",
+          "Đơn giá vật liệu",
+          "Đơn giá nhân công",
+          "Đơn giá máy",
+          "Thành tiền " + project().currency,
         ],
         CT.estimate(project().boq, project().estimate).lines.map((i) => [
           i.name,
@@ -1768,14 +2024,12 @@
       const f = project().finance;
       exportCSV(
         "nen-lich-tra-no.csv",
-        ["Thang", "Goc", "Lai", "Tong tra", "Du no"],
-        CT.loan(f.principal, f.rate, f.months, f.method).rows.map((x) => [
-          x.month,
-          x.capital,
-          x.interest,
-          x.payment,
-          x.balance,
-        ]),
+        ["Tháng", "Gốc trả", "Lãi trả", "Tổng trả", "Dư nợ cuối kỳ"],
+        CT.loan(f.principal, f.rate, f.months, f.method).rows.map((x) => {
+          // Làm tròn theo đơn vị tiền để bảng tính không hiện số lẻ dài.
+          const digits = project().currency === "USD" ? 2 : 0, round = (v) => Number(v.toFixed(digits));
+          return [x.month, round(x.capital), round(x.interest), round(x.payment), round(x.balance)];
+        }),
       );
     },
     "network-svg": () => {
@@ -1805,11 +2059,11 @@
       const e = project().estimate;
       modal(
         "Tỷ lệ & chi phí dự toán",
-        `<div class="form-grid">${field("overhead", "Chi phí chung (% trực tiếp)", e.overhead, "number", 'min="0" max="100" step="any"')}${field("other", "Chi phí khác", e.other, "number", 'min="0" max="1000000000000000" step="any"')}${field("contingency", "Dự phòng (%)", e.contingency, "number", 'min="0" max="100" step="any"')}${field("vat", "Thuế nhập tùy chỉnh (%)", e.vat, "number", 'min="0" max="100" step="any"')}</div><p class="form-caption" style="margin-top:18px">Cơ sở dự phòng = trực tiếp + chung + khác. Cơ sở thuế = tổng trước thuế, gồm dự phòng. Đây là mô hình nội bộ; bạn cần đối chiếu cơ sở tính với hồ sơ dự án thực tế.</p>`,
+        `<div class="form-grid">${field("overhead", "Chi phí chung (% trực tiếp)", e.overhead, "number", 'min="0" max="100" step="any"')}${field("other", "Chi phí khác", e.other, "number", 'min="0" max="1000000000000000" step="any"')}${field("contingency", "Dự phòng (%)", e.contingency, "number", 'min="0" max="100" step="any"')}${field("profit", "Thu nhập chịu thuế tính trước (% × (T + C))", e.profit ?? 0, "number", 'min="0" max="100" step="any"')}${field("vat", "Thuế GTGT (%)", e.vat, "number", 'min="0" max="100" step="any"')}</div><p class="form-caption" style="margin-top:18px">T trực tiếp → C = T × % chung → TL = (T + C) × % → dự phòng tính trên T + C + TL + khác → thuế GTGT trên giá trước thuế (gồm dự phòng). Tỷ lệ do bạn nhập theo hồ sơ dự án; ứng dụng không tự chọn mức theo văn bản pháp luật.</p>`,
         (f) =>
           commit(
             (p) =>
-              Object.keys(p.estimate).forEach(
+              ["overhead", "other", "contingency", "vat", "profit"].forEach(
                 (k) => (p.estimate[k] = formNumber(f, k)),
               ),
             "Đã cập nhật tỷ lệ dự toán",
@@ -1911,7 +2165,7 @@
       await api("/api/logout", "POST", {});
       team = null;
       try {
-        db = JSON.parse(localStorage.getItem(KEY));
+        db = loadWorkspace(localStorage.getItem(KEY));
       } catch {
         db = null;
       }
@@ -1947,6 +2201,8 @@
       if(e.dataset.graphZoom){const d=activeGraphDraft();d.zoom=Math.max(.2,Math.min(3,d.zoom*Number(e.dataset.graphZoom)));const svg=$('#network-svg svg'),bounds=GraphBoard.bounds(d.graph,d.positions);svg.style.width=bounds.width*d.zoom+'px';svg.style.height=bounds.height*d.zoom+'px';return;}
       if(e.dataset.exportFormat){await exportPages(e.dataset.exportFormat);return;}
       if(e.dataset.restoreProject){await restoreProject(e.dataset.restoreProject);return;}
+      if(e.dataset.removeMember){await api("/api/projects/"+encodeURIComponent(project().id)+"/members/"+encodeURIComponent(e.dataset.removeMember),"DELETE");toast("Đã gỡ thành viên khỏi dự án.");if(Number(e.dataset.removeMember)===team?.id){$("#modal").close();await loadTeam(team);}else await membersModal();return;}
+      if(e.dataset.revokeInvite){await api("/api/projects/"+encodeURIComponent(project().id)+"/invites/"+encodeURIComponent(e.dataset.revokeInvite),"DELETE");toast("Đã thu hồi lời mời.");await membersModal();return;}
       if (e.dataset.mode)
         return transitionView(() => chooseMode(e.dataset.mode));
       if (e.dataset.detailMode !== undefined) {
@@ -2143,11 +2399,10 @@
             .split(/[\n;]+/)
             .map((s) => s.trim())
             .filter(Boolean);
-          if (values.some((s) => !/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(s)))
-            throw new Error(
-              "Dòng tiền chỉ nhập số; mỗi dòng một kỳ. Dùng dấu chấm cho phần thập phân.",
-            );
-          p.finance.flows = values.map(Number);
+          const parsed = values.map(parseNumberVN), bad = values.find((_, i) => !Number.isFinite(parsed[i]));
+          if (bad !== undefined)
+            throw new Error("Dòng tiền “" + bad + "” không phải số. Mỗi dòng một kỳ, ví dụ -1.000.000 hoặc 350.000,5.");
+          p.finance.flows = parsed;
           p.finance.discount = formNumber(f, "discount");
         }, "Đã phân tích dòng tiền");
     } catch (e) {
@@ -2161,13 +2416,23 @@
     save();
     render();
   });
+  let searchTimer = null;
+  $("#main").addEventListener("compositionend", (event) => {
+    if (event.target.id === "task-search") event.target.dispatchEvent(new Event("input", { bubbles: true }));
+  });
   $("#main").addEventListener("input", (event) => {
     if (event.target.id === "task-search") {
-      search = event.target.value;
-      const start = event.target.selectionStart;
-      render();
-      $("#task-search")?.focus();
-      $("#task-search")?.setSelectionRange(start, start);
+      if (event.isComposing) return;
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        const input = $("#task-search");
+        if (!input) return;
+        search = input.value;
+        const start = input.selectionStart;
+        render();
+        $("#task-search")?.focus();
+        $("#task-search")?.setSelectionRange(start, start);
+      }, 220);
     }
   });
   $("#main").addEventListener("change", (event) => {
@@ -2186,6 +2451,7 @@
         p = data.project || data;
       if (data.schema !== undefined && data.schema !== 1)
         throw new Error("Phiên bản dữ liệu chưa được hỗ trợ.");
+      normalizeProject(p);
       validate(p);
       p.id = uid();
       p.name = p.name.slice(0, 140) + " · bản nhập";
@@ -2258,25 +2524,25 @@
     );
     $$(".reveal").forEach((e) => observer.observe(e));
   }
-  if(new URLSearchParams(location.search).get('project')==='nhom-qlda'&&db.projects.some(p=>p.id==='nhom-quan-ly-du-an')) {
-    db.selected='nhom-quan-ly-du-an';chooseMode('personal');page='costs';optimization=CT.optimize(project().tasks,project().indirectBase,project().dailySaving);render();
+  const deepLink={'nhom-qlda':'nhom-quan-ly-du-an','bai-a-k':'bai-tap-a-k'}[new URLSearchParams(location.search).get('project')];
+  if(deepLink&&db.projects.some(p=>p.id===deepLink)) {
+    db.selected=deepLink;chooseMode('personal');page='costs';optimization=CT.optimize(project().tasks,project().indirectBase,project().dailySaving);render();
   }
   save();
   if (location.protocol !== "file:")
     fetch("/api/me")
       .then((r) => (r.ok ? r.json() : null))
-      .then(
-        (data) =>
-          (serverAvailable = Boolean(
-            data && ("setup" in data || "user" in data),
-          )),
-      )
+      .then((data) => {
+        serverAvailable = Boolean(data && ("setup" in data || "user" in data));
+        sessionUser = data?.user || null;
+      })
       .catch(() => {});
   document.addEventListener('click',event=>{const button=event.target.closest('[data-camera-action]');if(button)(button.closest('.hero-world')?heroScene:scene)?.adjustCamera?.(button.dataset.cameraAction);});
   const heroPresets=$('.hero-presets');if(heroPresets){heroPresets.innerHTML=DOMPurify.sanitize(constructionControls('hero',ConstructionSequence.nearest(heroProgress)));updateHeroProcess();}
   document.addEventListener('change',event=>{
     if(event.target.id==='graph-node-style'){graphNodeStyle=event.target.value;render();return;}
     if(event.target.id==='network-type'){networkType=event.target.value;render();return;}
+    if(event.target.id==='pert-target'){pertTarget=Number(event.target.value);render();return;}
     if(event.target.dataset.processSelect){if(event.target.dataset.processSelect==='hero')seekHeroStep(Number(event.target.value));else window.seekConstructionStep?.(event.target.value);return;}
 
     if(event.target.dataset.printSection){if(event.target.checked)printSelected.add(event.target.dataset.printSection);else printSelected.delete(event.target.dataset.printSection);return;}
@@ -2292,12 +2558,6 @@
     if(event.target.closest('#planner-config')&&planningDraft().report){planningDraft().stale=true;const apply=$('[data-action="apply-planning"]');if(apply)apply.disabled=true;$('#planner-live').textContent='Cấu hình đã đổi. Bấm giải lại để cập nhật kết quả.';}
   });
   if(new URLSearchParams(location.search).has("invite"))openInvitation();
-  document.addEventListener('scroll',event=>{
-    const container=event.target;if(!(container instanceof Element))return;
-    const chart=container.querySelector?.('.gantt[data-gantt-days]');if(!chart)return;
-    const total=Number(chart.dataset.ganttDays),den=Number(chart.dataset.ganttDen);if(total<=120)return;
-    const start=Math.max(0,Math.floor(container.scrollLeft/28)-10),end=Math.min(total,start+Math.ceil(container.clientWidth/28)+30),track=chart.querySelector('.gantt-header .gantt-track');let html='';for(let day=start;day<=end;day++)html+=`<span class="gantt-tick" style="left:${day/den*100}%">${day}</span>`;track.innerHTML=DOMPurify.sanitize(html);
-  },true);
   window.Nen = {
     version: "0.1.0",
     getState: () => copy({ mode, page, project: project() }),

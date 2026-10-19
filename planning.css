@@ -10,3 +10,97 @@
 @media(max-width:760px){.network-choices select{min-width:0;width:100%}.network-choices{gap:8px}.network-choices small{font-size:10px}.task-extra{padding:12px}}
 .gantt-header,.gantt-row{grid-template-columns:var(--gantt-label-width,260px) minmax(0,1fr)}.gantt-label{position:sticky;left:0;z-index:3;background:#fff}.gantt-header .gantt-label{background:#f1f7ff;z-index:4}.gantt .gantt-tick{font-size:9px}.report-sheet .gantt{min-width:0!important}.report-sheet .gantt-label{position:static}.report-sheet .gantt-tick{font-size:9px}@media(max-width:760px){.gantt{--gantt-label-width:200px}.gantt-label{font-size:9px;padding-left:12px}}
 .graph-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:14px 0 18px}.graph-tools label{display:flex;align-items:center;gap:8px;font-size:11px;color:#3a628b}.graph-tools select{font:11px BeVietnam,Arial,sans-serif;padding:9px;border:1px solid #bfd3e9;border-radius:5px;color:#1a4f88;background:#fff}.graph-tools .form-caption{width:100%;margin-top:5px}.graph-board-svg{display:block;max-width:none!important;touch-action:none;user-select:none}.graph-node{cursor:grab;outline:none}.graph-node:focus>circle,.graph-node:focus>rect{stroke:#1688d4;stroke-width:3;filter:drop-shadow(0 0 3px #258bd044)}.graph-node:active{cursor:grabbing}.graph-preview{overflow:auto;max-height:620px}.report-sheet .graph-tools{display:none}.report-sheet .graph-node{cursor:default}.report-sheet .graph-board-svg{max-width:100%!important}.report-sheet .graph-preview{overflow:visible;max-height:none}.report-sheet .graph-edge text{paint-order:stroke;stroke:#fff;stroke-width:3px}@media(max-width:760px){.graph-tools .btn{min-height:40px}.graph-tools label{width:100%}.graph-tools select{flex:1}}
+
+/* ===== Làm rõ chữ và biểu đồ (lớp cuối, ghi đè các cỡ chữ 8–11px trước đó) ===== */
+:root {
+  --ink: #15335c;
+  --ink-soft: #46658b;
+  --brand: #032b91;
+  --brand-2: #1488db;
+  --crit: #c4623d;
+  --crit-soft: #f6d9cc;
+  --crew: #6f9fd8;
+  --over: #d27a52;
+}
+body { font-size: 14px; color: var(--ink); }
+table { font-size: 13px; }
+th { font-size: 12px; letter-spacing: 0.02em; }
+td .code, .code { font-size: 11px; }
+.badge { font-size: 11px; }
+.eyebrow, .page-heading .eyebrow, .modal-header .eyebrow { font-size: 11px; }
+.kpi-title { font-size: 12px; }
+.kpi-sub, .data-note, .field small, .panel-head p, .form-caption, .notice p, .history-item small,
+.task-deps, .legend, .filter-check, .stat-row, .callout, .path-node, .notice, .text-link,
+.field label, .form-section, .weekday-group label, .relation-help, .team-roles, .project-card-meta,
+.plan-choice small, .plan-submit > span, .plan-alternatives > strong, .dependency-row label > span,
+.dependency-editor small, .network-choices small, .task-extra small, .graph-tools label,
+.process-navigation button, .construction-process select, .tabbar button, .phase-card p,
+.scene-details button, .detail-note, .machine-status, .scene-day, .app-footer, .save-status,
+.currency-label, .scope-pill, .breadcrumb, .side-label { font-size: 12.5px; }
+.plan-flow > span, .plan-alternatives .btn, .tiny-progress, .phase-card .phase-num,
+.process-counter, .scene-details > span, .risk-axis, .info-number > span { font-size: 11.5px; }
+.panel-head p, .form-caption, .data-note { line-height: 1.55; color: var(--ink-soft); }
+.risk-cell { font-size: 12px; }
+.chart-label { font-size: 11.5px; fill: #4a6c93; }
+.chart-label.strong { font-weight: 600; fill: var(--ink); }
+
+/* Gantt: nhãn căn trái, chữ đọc được, thanh có độ cao rõ. */
+.gantt-header, .gantt-row { height: auto; min-height: 40px; }
+.gantt-header { min-height: 36px; }
+.gantt .gantt-label, .gantt-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  font-size: 13px;
+  padding: 8px 14px;
+  line-height: 1.3;
+}
+.gantt-row .gantt-label { color: var(--ink); background: #fff; border: 0; border-right: 1px solid #dce6f4; cursor: pointer; width: 100%; }
+.gantt-row .gantt-label > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gantt-row .gantt-label small { flex: 0 0 auto; min-width: 22px; font-weight: 600; color: var(--brand-2); margin: 0; }
+.gantt-row.is-critical .gantt-label small { color: var(--crit); }
+.gantt-row .gantt-label:hover { background: #f3f8ff; }
+.gantt-header .gantt-label { font-size: 11px; letter-spacing: 0.06em; font-weight: 600; color: var(--ink-soft); }
+.gantt .gantt-tick, .gantt-tick { font-size: 11px; top: 11px; transform: translateX(-50%); color: #5a7aa0; }
+.gantt-bar { top: 10px; height: 20px; font-size: 11px; border-radius: 5px; }
+.gantt-bar > span:last-child { inset: 2px 6px; line-height: 16px; font-weight: 600; }
+.gantt-bar.milestone { width: 0 !important; overflow: visible; background: transparent; }
+.gantt-bar.milestone > span:last-child { inset: 0 auto 0 -7px; color: var(--crit); font-size: 15px; }
+.gantt-float { top: 15px; height: 10px; }
+.gantt-more { padding: 10px 16px; border-top: 1px solid #edf2f9; }
+.path-node .path-rel { font-size: 11px; margin: 0 8px; opacity: 0.75; }
+@media (max-width: 760px) {
+  .gantt { --gantt-label-width: 170px; }
+  .gantt .gantt-label, .gantt-label { font-size: 12px; padding: 8px 10px; }
+}
+
+/* Biểu đồ dùng chung */
+.resource-chart { height: auto; aspect-ratio: 800 / 260; }
+.finance-chart { height: auto; aspect-ratio: 800 / 230; }
+.finance-chart.cost-chart { aspect-ratio: 830 / 240; }
+.chart-line { stroke: #e3ecf7; }
+.chart-axis { stroke: #b9cbe2; stroke-width: 1.2; }
+.bar-crew { fill: var(--crew); }
+.bar-over { fill: var(--over); }
+.bar-in { fill: #5b9bd8; }
+.bar-out { fill: var(--over); }
+.chart-capacity { stroke: var(--crit); stroke-width: 1.6; stroke-dasharray: 6 4; fill: none; }
+.chart-average { stroke: var(--brand); stroke-width: 1.3; stroke-dasharray: 2 3; fill: none; }
+.chart-series { fill: none; stroke-width: 2.4; }
+.chart-series.total { stroke: var(--brand); }
+.chart-series.direct { stroke: #7fa7d6; stroke-dasharray: 6 4; stroke-width: 2; }
+.chart-series.cumulative { stroke: var(--brand); stroke-width: 1.8; }
+.chart-point { fill: #fff; stroke: var(--brand); stroke-width: 2; }
+.chart-best { fill: var(--crit); stroke: #fff; stroke-width: 2; }
+.plan-charts h3 { font-size: 14px; margin: 0 0 6px; }
+.plan-objective-note { margin: 6px 0 0; font-size: 13px; color: var(--ink-soft); line-height: 1.5; }
+.plan-comparison th { font-weight: 500; color: var(--ink); }
+.plan-comparison td.num strong { color: var(--brand); }
+.gantt-header .gantt-tick:first-child { transform: none; }
+.pert-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; align-items: end; }
+.pert-grid .muted { margin: 0 0 6px; font-size: 12.5px; }
+.pert-grid small { display: block; margin-top: 4px; color: var(--ink-soft); font-size: 12px; }
+.pert-grid input { width: 100%; max-width: 160px; padding: 9px 12px; border: 1px solid #c9d8ea; border-radius: 8px; font-size: 16px; color: var(--ink); }
+.pert-summary { margin-bottom: 20px; }
+@media (max-width: 760px) { .pert-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -28,9 +28,11 @@ Cá nhân lưu localStorage `nen.workspace.v1`. Xuất JSON để chuyển dữ 
 
 `npm test`. `npm run test:browser` chạy máy chủ tạm ở cổng 4193; Windows dùng Edge, Linux/macOS dùng Chromium đã cài bằng Playwright. Đổi `PW_CHANNEL` nếu cần. Báo cáo chụp màn hình ở `test-results/`. Chạy `npm audit` khi đổi thư viện.
 
+Máy chủ chỉ nhận Host loopback hoặc địa chỉ IP; truy cập bằng tên máy cần `NEN_ALLOWED_HOSTS`, sau proxy dùng `NEN_ORIGIN` và `NEN_TRUST_PROXY=1`. Khi mở ra ngoài loopback, tài khoản quản trị đầu tiên cần mã thiết lập in ở console. Dự án đã xóa được giữ 30 ngày (`NEN_PURGE_DELETED_DAYS`).
+
 ## Các giới hạn cần giữ rõ
 
-Bộ tối ưu nguồn lực hiện có một nhóm người tổng hợp, công tác liên tục, bước ngày nguyên, không lịch nghề hay ca. Bài lớn dùng heuristic có giới hạn thời gian và không đảm bảo tối ưu toàn cục. Nhu cầu công tác khi rút ngắn được tăng theo hao phí ngày công, làm tròn lên. Chi phí trực tiếp đã có nhân công, không cộng lại đơn giá ngày công; chi phí huy động là thành phần riêng.
+Bộ tối ưu nguồn lực (planner.js) có một nhóm người tổng hợp, công tác liên tục, bước ngày nguyên, không lịch nghề hay ca. Mục tiêu so sánh theo thứ tự ưu tiên (hàm keyOf); bài ≤ 10 công tác duyệt nhánh-cận đầy đủ, bài lớn dùng xếp nối tiếp + dồn tiến–lùi + tìm kiếm cục bộ lặp có giới hạn thời gian và không đảm bảo tối ưu toàn cục (giao diện hiển thị cận dưới). tests/planner.test.cjs đối chiếu kết quả duyệt đầy đủ với phép liệt kê độc lập; giữ bài kiểm thử này khi sửa hàm mục tiêu. Cảnh 3D lấy tiến trình từ lịch qua sceneSpans() trong app.js: mỗi công việc có giai đoạn được canh hàng với các bước của ConstructionSequence theo tên và "tầng a–b". Nhu cầu công tác khi rút ngắn được tăng theo hao phí ngày công, làm tròn lên. Chi phí trực tiếp đã có nhân công, không cộng lại đơn giá ngày công; chi phí huy động là thành phần riêng.
 
 Mô hình 3D mang tính minh họa kiến trúc 12 tầng cơ sở 2, không phải bản sao đo đạc hay BIM được phê duyệt. Cẩu và tuyến xe là kịch bản, chưa phải mô phỏng va chạm vật lý toàn công trường. Dữ liệu giá minh họa không thay thế bộ đơn giá/định mức địa phương. PERT mới có thời gian kỳ vọng và phương sai từng công tác, chưa mô phỏng Monte Carlo xác suất hoàn thành dự án.
 

@@ -10,4 +10,54 @@ assert.equal((await api('/api/deleted-projects','GET',undefined,owner.cookie)).b
 assert.equal((await api('/api/projects/'+p.id+'/restore','POST',{},people.editor.cookie)).status,403);
 assert.equal((await api('/api/projects/'+p.id+'/restore','POST',{},owner.cookie)).status,200);
 assert.equal((await api('/api/projects/'+p.id,'GET',undefined,owner.cookie)).body.project._version,4);
+
+// --- Who can see whom: non-admins only see people they share a project with.
+const route='/api/projects/'+p.id,ownerId=owner.body.user.id;
+const ids=Object.fromEntries(Object.entries(people).map(([role,joined])=>[role,joined.body.user.id]));
+const byId=(a,b)=>a-b;
+assert.deepEqual((await api('/api/users','GET',undefined,people.editor.cookie)).body.users.map(u=>u.id).sort(byId),[ownerId,ids.viewer,ids.commenter,ids.editor].sort(byId));
+
+// --- Member removal: owners remove others, anyone may leave, the original owner stays.
+assert.equal((await api(route+'/members/'+ids.commenter,'DELETE',undefined,people.viewer.cookie)).status,403);
+assert.equal((await api(route+'/members/'+ids.commenter,'DELETE',undefined,owner.cookie)).status,200);
+assert.equal((await api(route,'GET',undefined,people.commenter.cookie)).status,403);
+assert.equal((await api(route+'/members/'+ids.commenter,'DELETE',undefined,owner.cookie)).status,404);
+assert.equal((await api(route+'/members/'+ownerId,'DELETE',undefined,owner.cookie)).status,400);
+assert.equal((await api(route+'/members/'+ids.viewer,'DELETE',undefined,people.viewer.cookie)).status,200);
+assert.equal((await api(route,'GET',undefined,people.viewer.cookie)).status,403);
+assert.ok((await api(route+'/audit','GET',undefined,owner.cookie)).body.events.some(e=>e.action==='Xóa thành viên tài khoản #'+ids.commenter));
+
+// --- Co-owners: cannot demote/remove each other or the original owner, cannot delete the project.
+assert.equal((await api(route+'/members','POST',{userId:ids.editor,role:'owner'},owner.cookie)).status,200);
+assert.equal((await api(route+'/members','POST',{userId:ids.commenter,role:'owner'},owner.cookie)).status,200);
+assert.equal((await api(route+'/members','POST',{userId:ids.commenter,role:'viewer'},people.editor.cookie)).status,403);
+assert.equal((await api(route+'/members/'+ids.commenter,'DELETE',undefined,people.editor.cookie)).status,403);
+assert.equal((await api(route+'/members','POST',{userId:ownerId,role:'editor'},people.editor.cookie)).status,400);
+assert.equal((await api(route+'/members/'+ownerId,'DELETE',undefined,people.editor.cookie)).status,400);
+const liveVersion=(await api(route,'GET',undefined,owner.cookie)).body.project._version;
+assert.equal((await api(route,'DELETE',{version:liveVersion},people.editor.cookie)).status,403);
+
+// --- Inviter re-check: an invite made by a co-owner dies when that co-owner is demoted.
+const coInvite=await api(route+'/invites','POST',{role:'viewer'},people.editor.cookie);
+assert.equal(coInvite.status,201);
+assert.equal((await api(route+'/members','POST',{userId:ids.editor,role:'editor'},owner.cookie)).status,200);
+assert.equal((await api('/api/invites/'+coInvite.body.token,'POST',{name:'Late',email:'late@qlda.test',password:'Test-only-4567'})).status,410);
+assert.equal((await api('/api/invites/'+coInvite.body.token)).status,404);
+assert.equal((await api('/api/login','POST',{email:'late@qlda.test',password:'Test-only-4567'})).status,401,'no account created');
+
+// --- Invite listing and revocation (owners only; raw tokens are never listed).
+const pending=await api(route+'/invites','POST',{role:'commenter'},owner.cookie);
+assert.equal(pending.status,201);
+const listed=(await api(route+'/invites','GET',undefined,owner.cookie)).body.invites;
+assert.ok(listed.some(i=>i.id===pending.body.id&&i.role==='commenter'&&i.creator==='Owner'));
+assert.ok(!JSON.stringify(listed).includes(pending.body.token));
+assert.equal((await api(route+'/invites','GET',undefined,people.editor.cookie)).status,403);
+assert.equal((await api(route+'/invites/'+pending.body.id,'DELETE',undefined,people.editor.cookie)).status,403);
+assert.equal((await api(route+'/invites/'+pending.body.id,'DELETE',undefined,owner.cookie)).status,200);
+assert.equal((await api('/api/invites/'+pending.body.token)).status,404);
+assert.equal((await api(route+'/invites/'+pending.body.id,'DELETE',undefined,owner.cookie)).status,404);
+
+// --- Only the original owner manages another owner's role.
+assert.equal((await api(route+'/members','POST',{userId:ids.commenter,role:'viewer'},owner.cookie)).status,200);
+console.log('✓ Thành viên: xem tài khoản theo dự án, xóa/rời dự án, giới hạn owner phụ, thu hồi lời mời, kiểm tra lại người mời.');
 console.log('✓ Mời dùng một lần, tạo tài khoản qua lời mời, viewer/commenter/editor, lưu bình luận và từ chối sửa dữ liệu/bình luận sai quyền.');}catch(e){console.error(e);console.error(output);process.exitCode=1}finally{proc.kill();proc.once('exit',()=>fs.rmSync(dir,{recursive:true,force:true}));}})();

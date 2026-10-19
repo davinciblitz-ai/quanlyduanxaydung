@@ -15,6 +15,19 @@ Mở **http://127.0.0.1:4173/**. Các tài nguyên giao diện đã nằm trong 
 
 Bạn cũng có thể mở `index.html` trực tiếp để dùng công cụ cá nhân với mô hình Canvas dự phòng. WebGL dùng khi mở qua máy chủ HTTP. Dùng địa chỉ máy chủ ở trên sẽ bảo đảm font chữ, lưu dữ liệu và chế độ cộng tác hoạt động nhất quán.
 
+## Bản web trên Cloudflare Pages
+
+Dùng ngay tại **https://quanlyduanxaydung.pages.dev** (chế độ Cá nhân, dữ liệu lưu trên trình duyệt; chế độ đội dự án cần chạy `npm start`). Bài tập trong Dữ liệu QLDA.docx có sẵn: bài A–G (`/?project=nhom-qlda`) và bài 11 công tác A–K (`/?project=bai-a-k`).
+
+Cập nhật bản web:
+
+```sh
+npm run build:static
+npx wrangler pages deploy dist --project-name quanlyduanxaydung --branch main
+```
+
+`build:static` chép đúng danh sách file công khai của `server.cjs` vào `dist/` kèm header bảo mật (`_headers`).
+
 ## Bắt đầu trong hai chế độ
 
 **Cá nhân:** vào Tổng quan, chọn Tiến độ để sửa công việc hoặc thêm mới. Dữ liệu tự lưu trên trình duyệt này. Xuất JSON để sao lưu toàn bộ dự án; CSV dùng cho bảng tiến độ, BOQ và lịch trả nợ.
@@ -39,9 +52,9 @@ Tài khoản, dữ liệu và nhật ký được lưu vào `data/nen.sqlite`. G
 - **Nhận diện:** xanh #032b91, xanh sáng #1488db và trắng, lấy từ báo cáo tham chiếu. Logo Bách Khoa TP.HCM trích từ ảnh có trong báo cáo.
 - **CPM:** nhập mã, tên, thời lượng, FS/SS/FF/SF và lag âm/dương. Nhập theo danh sách gồm công tác trước, loại quan hệ, dấu +/− và số ngày. Tính ES, EF, LS, LF, TF, dự trữ riêng, quan hệ găng, Gantt từng ngày và mạng AON/AOA kéo thả, lưu bố cục và tải SVG.
 - **Kế hoạch gốc:** lưu các mốc để so sánh thời lượng và vị trí thanh Gantt về sau.
-- **Dự toán:** khối lượng × đơn giá vật liệu/nhân công/máy; chi phí chung, khác, dự phòng và thuế tùy nhập. Có thể tổng hợp các dòng gắn mã công việc thành ngân sách trực tiếp của công việc.
-- **Chi phí:** EVM từ ngân sách, % hoàn thành và chi phí thực tế; phân tích rút ngắn với đường găng được tính lại ở mỗi tổ hợp.
-- **Tài chính:** trả gốc đều hoặc trả tổng đều, dư nợ giảm dần, lãi đơn/lãi kép, PV/FV, NPV, IRR và hoàn vốn giản đơn.
+- **Dự toán:** khối lượng × đơn giá vật liệu/nhân công/máy (T) → chi phí chung C = T × % → thu nhập chịu thuế tính trước TL = (T + C) × % → chi phí khác → dự phòng → thuế GTGT. Tỷ lệ do bạn nhập. Có thể tổng hợp các dòng gắn mã công việc thành ngân sách trực tiếp của công việc.
+- **Chi phí:** EVM từ ngân sách, % hoàn thành và chi phí thực tế: PV, EV, AC, CV, SV, CPI, SPI, EAC (theo CPI, theo ngân sách, theo CPI × SPI), ETC, VAC, TCPI; phân tích rút ngắn với đường găng được tính lại ở mỗi tổ hợp (không rút công tác có thời lượng về 0 ngày).
+- **Tài chính:** trả gốc đều hoặc trả tổng đều, dư nợ giảm dần, lãi đơn/lãi kép, PV/FV, NPV, IRR, chỉ số sinh lời PI, hoàn vốn giản đơn và hoàn vốn có chiết khấu. Dòng tiền nhập kiểu Việt Nam (`-1.000.000`, `2,5`).
 - **Nguồn lực:** nhân công theo ngày, giới hạn năng lực, ngày vượt tải và phân công người phụ trách.
 - **Rủi ro:** xác suất × tác động, sổ rủi ro, người xử lý và biện pháp ứng phó.
 
@@ -53,12 +66,12 @@ Kết quả kiểm chứng: **25 ngày, trực tiếp 450 USD**; phương án t�
 
 ## Quy ước và giới hạn
 
-- Tối đa 150 công việc/dự án, 100 dự án/không gian, 1.000 dòng BOQ. Bước thời lượng/lag là một ngày làm việc; lịch chung theo tuần, chưa có ngày lễ hoặc lịch tổ đội riêng. Mạng quan hệ phải không có vòng.
+- Tối đa 150 công việc/dự án, 100 dự án/không gian, 1.000 dòng BOQ. Bước thời lượng/lag là một ngày làm việc; lịch chung theo tuần, có danh sách ngày nghỉ lễ của dự án (Cài đặt dự án); chưa có lịch tổ đội riêng. Mạng quan hệ phải không có vòng.
 - Mốc 0 là đầu ngày làm việc đầu tiên. EF = ES + thời lượng là ranh giới kết thúc. Ngày hoàn thành hiển thị ở tổng quan là ngày làm việc cuối cùng, tương ứng mốc T−1 khi T>0.
 - Mô hình 3D là minh họa khối nhà 12 tầng minh họa cơ sở 2 Bách Khoa TP.HCM, chưa dựng theo bản vẽ đo đạc hay nhập mô hình IFC/BIM. % giai đoạn lấy từ ES/EF kế hoạch; không phải nghiệm thu thực tế.
-- CPM cơ bản chưa san bằng nguồn lực. Tab Xếp & tối ưu có bộ lập lịch riêng. Phân tích rút ngắn tối đa 50.000 tổ hợp; nếu vượt giới hạn, giảm phạm vi rút ngắn hoặc cố định vài công việc. Chi phí tăng tuyến tính và chi phí gián tiếp được chặn tại 0.
+- CPM cơ bản chưa san bằng nguồn lực. Tab Xếp & tối ưu có bộ lập lịch riêng (xem mục Xếp & tối ưu bên dưới). Phân tích rút ngắn tối đa 50.000 tổ hợp; nếu vượt giới hạn, giảm phạm vi rút ngắn hoặc cố định vài công việc. Chi phí tăng tuyến tính và chi phí gián tiếp được chặn tại 0.
 - PV trong EVM dùng kế hoạch hiện tại, giả định chi phí phân bổ tuyến tính theo thời lượng; chưa dùng đường cơ sở chi phí hợp đồng. EAC giả định CPI giữ nguyên.
-- Dự toán là mô hình nội bộ, chưa kết nối định mức, bộ đơn giá theo địa phương hay dữ liệu pháp luật. Thuế mặc định 0 và do bạn nhập; không tự chọn mức thuế áp dụng.
+- Dự toán là mô hình nội bộ, chưa kết nối định mức, bộ đơn giá theo địa phương hay dữ liệu pháp luật. Thuế GTGT và thu nhập chịu thuế tính trước mặc định 0 và do bạn nhập; không tự chọn mức áp dụng theo văn bản pháp luật.
 - Lãi vay cố định, danh nghĩa năm chia 12, giải ngân một lần, trả cuối tháng; chưa có phí, lãi thả nổi, ân hạn hoặc quy ước ngày thực tế của ngân hàng.
 - Dòng tiền NPV/IRR theo các kỳ năm cách đều, kỳ 0 là thời điểm hiện tại. Dòng tiền đổi dấu nhiều lần sẽ không đưa ra một IRR duy nhất. Các máy tính tài chính không tự cộng vào dự toán để tránh cộng trùng.
 - Máy chủ SQLite phục vụ thử nghiệm cục bộ hoặc nhóm nhỏ. Triển khai doanh nghiệp rộng cần bổ sung HTTPS, sao lưu tự động, quản trị danh tính và chính sách lưu trữ; các mục mở rộng nằm trong Hướng dẫn của web.
@@ -69,7 +82,7 @@ Kết quả kiểm chứng: **25 ngày, trực tiếp 450 USD**; phương án t�
 npm test
 ```
 
-Gồm 16 nhóm kiểm thử phép tính và kiểm thử máy chủ: bài A–G, các loại quan hệ/lag, 200 mạng nhỏ đối chiếu mọi lịch nguyên khả thi, sai dữ liệu, dự toán, lãi vay, IRR, lịch làm việc, phiên đăng nhập, phân quyền và chống ghi đè. Kiểm thử trình duyệt và kết quả kiểm tra bổ sung được ghi trong `KIEM-THU.md`.
+Gồm 21 nhóm kiểm thử phép tính, 13 nhóm kiểm thử bộ xếp lịch (có đối chiếu với phép liệt kê độc lập trên bài ngẫu nhiên) và kiểm thử máy chủ: bài A–G, các loại quan hệ/lag, 200 mạng nhỏ đối chiếu mọi lịch nguyên khả thi, sai dữ liệu, dự toán, lãi vay, IRR, lịch làm việc, phiên đăng nhập, phân quyền và chống ghi đè. Kiểm thử trình duyệt và kết quả kiểm tra bổ sung được ghi trong `KIEM-THU.md`.
 
 ## Thư viện và công cụ đã cài theo yêu cầu
 
@@ -79,8 +92,13 @@ Three.js và Motion dùng cho cảnh 3D và chuyển giao diện; phy-touch dùn
 
 ## Những chức năng bổ sung trong bản bàn giao
 
-- **Xếp & tối ưu:** hai mục tiêu (giải toàn dự án / tối ưu nguồn lực–chi phí), ba phương thức (xếp tay / CPM cơ bản / thuật toán), kiểm tra đủ quan hệ và giới hạn trước khi áp dụng. Mọi phương thức có đường găng và chi phí. Kết quả thuật toán lớn là phương án tốt nhất tìm được; chỉ ghi duyệt đầy đủ khi hoàn thành tìm kiếm toàn bộ miền đã xét.
-- **Điều hòa nhân lực:** đỉnh, tổng công, lượt huy động và thung lũng tăng lại sau khi giảm; giới hạn nhân lực tổng hợp, không ngắt quãng công tác. Chưa phân nghề, tăng ca, máy hữu hạn hoặc năng suất thực tế. Hàm mục tiêu chưa đưa lãi vay vào tối ưu lịch; máy tính tài chính là phần riêng.
+- **Xếp & tối ưu:** ba phương thức (xếp tay / CPM cơ bản / thuật toán), kiểm tra đủ quan hệ và giới hạn trước khi áp dụng. Thuật toán có mục tiêu rõ ràng, so sánh theo thứ tự ưu tiên chứ không trộn trọng số:
+  - *Giải toàn bộ dự án* → lịch **ngắn nhất** không vượt năng lực (hòa thì đỉnh thấp hơn, biểu đồ đều hơn).
+  - *Điều hòa nhân lực* → **đỉnh Rmax** nhỏ nhất → thời gian ngắn nhất → ΣR² nhỏ nhất (biểu đồ đều) → ít người huy động.
+  - *Tổng chi phí* → trực tiếp (gồm rút ngắn) + gián tiếp/ngày + huy động.
+
+  Mọi mục tiêu đặt số ngày trễ hạn lên đầu. Bài ≤ 10 công tác dùng nhánh-cận duyệt đầy đủ mọi mốc bắt đầu nguyên (kết quả ghi "tối ưu đã chứng minh"); bài lớn dùng xếp nối tiếp theo nhiều luật ưu tiên, dồn tiến–lùi và tìm kiếm cục bộ lặp, kèm **cận dưới lý thuyết** (đỉnh ≥ max(nhân công lớn nhất, tổng công ÷ hạn), thời gian ≥ max(CPM, tổng công ÷ năng lực)) để thấy khoảng cách tới tối ưu. Dự trữ của lịch đã bố trí được tính lùi có xét năng lực, nên hai việc phải nối nhau vì thiếu người đều là găng.
+- **Điều hòa nhân lực:** Rmax, Rtb = S/T, hệ số không điều hòa K1 = Rmax/Rtb, hệ số phân bố K2 = Sdư/S, tổng công S, số người huy động thêm; biểu đồ có đường năng lực và đường Rtb. Giới hạn nhân lực tổng hợp, không ngắt quãng công tác. Chưa phân nghề, tăng ca, máy hữu hạn hoặc năng suất thực tế. Hàm mục tiêu chưa đưa lãi vay vào tối ưu lịch; máy tính tài chính là phần riêng.
 - **Sơ đồ:** AON/PDM nút tròn hoặc thẻ, AOA cổ điển FS với lag không âm, Gantt, Gantt liên kết, tiến độ xiên theo phân đoạn, PERT ba ước lượng. AOA dùng công tác giả, chưa tối thiểu hóa số sự kiện. Mạng không phẳng có thể còn giao tuyến; đường tránh vuông góc và khoảng ngắt giúp phân biệt. Người dùng có thể kéo nút, đổi bố trí, lưu, khôi phục tự động và xuất SVG. Các thao tác này không đổi quan hệ CPM.
 - **In & xuất** ở cuối thanh bên: chọn nhiều mục, in, PDF, PNG/ZIP hoặc ảnh clipboard. Mỗi trang có nút sao chép/xuất nhanh. Sơ đồ lớn chia thành các ô có biên chồng khi xuất để giữ cỡ chữ. PDF tự động là ảnh; dùng In nếu cần văn bản có thể chọn.
 - **Cộng tác:** mời bằng liên kết một lần, hết hạn 48 giờ; quyền owner/editor/commenter/viewer; bình luận, nhật ký và kiểm tra phiên bản khi lưu. Liên kết localhost chỉ dùng được trên máy này. Khi triển khai cho người khác phải dùng địa chỉ máy chủ chung.

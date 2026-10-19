@@ -42,9 +42,8 @@
         t.duration,
         !fractional,
       );
-      ["cost", "actualCost", "crashSlope", "workers"].forEach((k) =>
-        number(t[k], t.id + " " + k),
-      );
+      const labels = { cost: "ngân sách", actualCost: "chi phí thực tế", crashSlope: "chi phí rút ngắn/ngày", workers: "nhân công" };
+      ["cost", "actualCost", "crashSlope", "workers"].forEach((k) => number(t[k], t.id + " " + labels[k]));
       number(t.progress, t.id + " % hoàn thành", 0, 100);
       if (!Array.isArray(t.deps))
         throw new Error(t.id + ": quan hệ phải là danh sách.");
@@ -174,8 +173,10 @@
     number(indirectBase, "Chi phí gián tiếp");
     number(dailySaving, "Tiết kiệm gián tiếp/ngày");
     let combinations = 1;
+    // Công tác có thời lượng không bị rút thành mốc 0 ngày.
+    const floor = (t) => Math.max(t.minDuration, t.duration > 0 ? 1 : 0);
     tasks.forEach((t) => {
-      combinations *= t.duration - t.minDuration + 1;
+      combinations *= Math.max(1, t.duration - floor(t) + 1);
     });
     if (combinations > limit)
       throw new Error(
@@ -214,7 +215,7 @@
         return;
       }
       const t = tasks[index];
-      for (let d = t.duration; d >= t.minDuration; d--) {
+      for (let d = t.duration; d >= floor(t); d--) {
         work[index].duration = d;
         walk(index + 1, extra + (t.duration - d) * t.crashSlope);
       }
@@ -235,17 +236,20 @@
       throw new Error("Tối đa 1.000 dòng dự toán.");
     const lines = items.map((i) => {
       ["qty", "material", "labor", "machine"].forEach((k) =>
-        number(i[k], "Dự toán " + k),
+        number(i[k], "Dự toán · " + { qty: "khối lượng", material: "đơn giá vật liệu", labor: "đơn giá nhân công", machine: "đơn giá máy" }[k]),
       );
       return { ...i, total: i.qty * (i.material + i.labor + i.machine) };
     });
-    ["overhead", "contingency", "vat"].forEach((k) =>
-      number(settings[k], k, 0, 100),
-    );
+    const labels = { overhead: "Tỷ lệ chi phí chung", contingency: "Tỷ lệ dự phòng", vat: "Thuế GTGT" };
+    const profitRate = settings.profit ?? 0;
+    ["overhead", "contingency", "vat"].forEach((k) => number(settings[k], labels[k], 0, 100));
+    number(profitRate, "Thu nhập chịu thuế tính trước", 0, 100);
     number(settings.other, "Chi phí khác");
+    // T trực tiếp → C chi phí chung = T × % → TL thu nhập chịu thuế tính trước = (T + C) × %
     const direct = lines.reduce((s, i) => s + i.total, 0),
-      overhead = (direct * settings.overhead) / 100;
-    const beforeReserve = direct + overhead + settings.other,
+      overhead = (direct * settings.overhead) / 100,
+      profit = ((direct + overhead) * profitRate) / 100;
+    const beforeReserve = direct + overhead + profit + settings.other,
       contingency = (beforeReserve * settings.contingency) / 100;
     const pretax = beforeReserve + contingency,
       vat = (pretax * settings.vat) / 100;
@@ -253,6 +257,7 @@
       lines,
       direct,
       overhead,
+      profit,
       other: settings.other,
       contingency,
       pretax,
@@ -337,7 +342,23 @@
       if (payback === null && before < 0 && total >= 0 && flows[0] < 0)
         payback = i - 1 + -before / flows[i];
     }
-    return { npv: npv(flows, annualRate / 100), irr, irrNote, payback };
+    // Hoàn vốn có chiết khấu: cộng dồn giá trị hiện tại từng kỳ.
+    const r = annualRate / 100;
+    let pvTotal = flows[0], discountedPayback = null;
+    for (let i = 1; i < flows.length; i++) {
+      const before = pvTotal, pv = flows[i] / Math.pow(1 + r, i);
+      pvTotal += pv;
+      if (discountedPayback === null && before < 0 && pvTotal >= 0 && flows[0] < 0)
+        discountedPayback = i - 1 + -before / pv;
+    }
+    // PI = PV dòng thu / PV dòng chi (giá trị tuyệt đối).
+    let pvIn = 0, pvOut = 0;
+    flows.forEach((f, i) => {
+      const pv = f / Math.pow(1 + r, i);
+      if (pv > 0) pvIn += pv;
+      else pvOut -= pv;
+    });
+    return { npv: npv(flows, r), irr, irrNote, payback, discountedPayback, pi: pvOut > 0 ? pvIn / pvOut : null };
   }
   function evm(rows, statusDay) {
     number(statusDay, "Ngày báo cáo", 0, 100000, true);
@@ -355,19 +376,43 @@
               : 0),
       0,
     );
+    const cpi = ac ? ev / ac : null,
+      spi = pv ? ev / pv : null,
+      eac = ev > 0 && ac > 0 ? (bac * ac) / ev : null;
     return {
       bac,
       ev,
       ac,
       pv,
-      cpi: ac ? ev / ac : null,
-      spi: pv ? ev / pv : null,
-      eac: ev > 0 && ac > 0 ? (bac * ac) / ev : null,
+      cpi,
+      spi,
+      eac,
       cv: ev - ac,
       sv: ev - pv,
+      // Dự báo khác: phần còn lại theo ngân sách / theo CPI × SPI.
+      eacBudget: ac + bac - ev,
+      eacCpiSpi: cpi && spi ? ac + (bac - ev) / (cpi * spi) : null,
+      etc: eac === null ? null : eac - ac,
+      vac: eac === null ? null : bac - eac,
+      // TCPI: hiệu suất chi phí phần việc còn lại cần đạt để không vượt BAC.
+      tcpi: bac - ac > 0 ? (bac - ev) / (bac - ac) : null,
+      percentComplete: bac ? ev / bac : 0,
+      percentSpent: bac ? ac / bac : 0,
     };
   }
-  function dateAt(start, offset, workdays) {
+  const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+  function parseHolidays(holidays) {
+    if (holidays === undefined || holidays === null) return new Set();
+    if (!Array.isArray(holidays) || holidays.length > 400)
+      throw new Error("Danh sách ngày nghỉ lễ tối đa 400 ngày.");
+    for (const h of holidays) {
+      const d = new Date(h + "T00:00:00Z");
+      if (typeof h !== "string" || !ISO_DAY.test(h) || !Number.isFinite(d.getTime()) || d.toISOString().slice(0, 10) !== h)
+        throw new Error("Ngày nghỉ lễ không hợp lệ: " + h);
+    }
+    return new Set(holidays);
+  }
+  function dateAt(start, offset, workdays, holidays) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(start))
       throw new Error("Ngày khởi công không hợp lệ.");
     const date = new Date(start + "T00:00:00Z");
@@ -383,11 +428,12 @@
     )
       throw new Error("Chọn ít nhất một ngày làm việc trong tuần.");
     number(offset, "Mốc thời gian", 0, 100000, true);
-    while (!workdays.includes(date.getUTCDay()))
-      date.setUTCDate(date.getUTCDate() + 1);
+    const off = parseHolidays(holidays);
+    const working = () => workdays.includes(date.getUTCDay()) && !off.has(date.toISOString().slice(0, 10));
+    while (!working()) date.setUTCDate(date.getUTCDate() + 1);
     for (let i = 0; i < offset; ) {
       date.setUTCDate(date.getUTCDate() + 1);
-      if (workdays.includes(date.getUTCDay())) i++;
+      if (working()) i++;
     }
     return date.toISOString().slice(0, 10);
   }
@@ -402,6 +448,7 @@
     npv,
     evm,
     dateAt,
+    parseHolidays,
     weight,
     number,
   };

@@ -369,6 +369,39 @@ window.Samples = (() => {
     p.history=[{at:new Date().toISOString(),text:'Nhập bài tập từ Dữ liệu QLDA.docx; chưa có số liệu nhân công hoặc lãi vay.',actor:'Cá nhân'}];
     return p;
   }
+  /**
+   * Bài "Ví dụ" 11 công tác A–K trong Dữ liệu QLDA.docx (slide 50).
+   * Chi phí rút ngắn/ngày = (chi phí rút ngắn − chi phí bình thường) / (thời gian bình thường − rút ngắn):
+   * B (16.600 − 10.000)/3 = 2.200; G (12.800 − 12.000)/4 = 200; H (17.000 − 16.000)/4 = 250; K (9.000 − 8.000)/1 = 1.000.
+   * Đề không cho chi phí gián tiếp nên để 0; nhập vào "Cài đặt chi phí gián tiếp" nếu đề bổ sung.
+   */
+  function exerciseAK() {
+    const p = base("Bài 2 · Mạng 11 công tác A–K (Dữ liệu QLDA.docx)", "USD");
+    p.id = "bai-tap-a-k";
+    p.workdays = [0, 1, 2, 3, 4, 5, 6];
+    p.statusDay = 0;
+    p.capacity = 0;
+    p.indirectBase = 0;
+    p.dailySaving = 0;
+    const row = (id, duration, deps, cost, minDuration, crashSlope) =>
+      ({ ...t(id, "Công tác " + id, duration, deps, cost, 0, 0, minDuration, crashSlope), stage: -1 });
+    p.tasks = [
+      row("A", 4, "", 2000, 4, 0),
+      row("B", 6, "", 10000, 3, 2200),
+      row("C", 2, "", 4000, 2, 0),
+      row("D", 8, "A", 18000, 8, 0),
+      row("E", 4, "D", 20000, 4, 0),
+      row("F", 10, "B", 15000, 10, 0),
+      row("G", 16, "B", 12000, 12, 200),
+      row("H", 8, "F", 16000, 4, 250),
+      row("I", 6, "E,H", 10000, 6, 0),
+      row("J", 6, "C", 10000, 6, 0),
+      row("K", 10, "G,J", 8000, 9, 1000),
+    ];
+    p.finance = { principal: 0, rate: 0, months: 12, method: "annuity", discount: 0, flows: [0, 0] };
+    p.history = [{ at: new Date().toISOString(), text: "Nhập bài 11 công tác A–K từ Dữ liệu QLDA.docx (thời gian và chi phí bình thường/rút ngắn).", actor: "Cá nhân" }];
+    return p;
+  }
   function empty() {
     const p = base("Dự án mới");
     p.tasks = [];
@@ -379,5 +412,5 @@ window.Samples = (() => {
     p.risks = [];
     return p;
   }
-  return { construction, textbook, group, empty };
+  return { construction, textbook, group, exerciseAK, empty };
 })();
