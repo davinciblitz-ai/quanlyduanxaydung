@@ -691,7 +691,7 @@
         )
       );
     if(preview)return `<div class="network-wrap graph-preview">${graphMarkup(r,'aon',false)}</div>`;
-    return heading('Sơ đồ mạng công việc','AON / PDM · mỗi nút là một công việc; mũi tên là quan hệ trước–sau.',`<button class="btn ghost" data-action="network-svg">Tải SVG</button>`)+networkChoices()+graphTools()+panel('Mạng công việc','Có thể kéo, đổi vị trí và lưu bố cục; số liệu được tính từ công việc.',`<div class="network-wrap" id="network-svg">${graphMarkup(r,'aon',true)}</div><div class="data-note">ES/EF: khởi/kết sớm · LS/LF: khởi/kết muộn · TF: dự trữ toàn phần · FF: dự trữ riêng · D: thời lượng · NC: người/ngày.</div>`)+panel('Các liên kết găng',r.duration+' ngày làm việc',`<div class="panel-body">${criticalLinks(r)}</div>`);
+    return heading('Sơ đồ mạng công việc','AON / PDM · mỗi nút là một công việc; mũi tên là quan hệ trước–sau.',`<button class="btn ghost" data-action="network-svg">Tải SVG</button>`)+networkChoices()+graphTools()+panel('Mạng công việc','Có thể kéo, đổi vị trí và lưu bố cục; số liệu được tính từ công việc.',`<div class="network-wrap" id="network-svg">${graphMarkup(r,'aon',true)}</div><div class="data-note">ES/EF: khởi/kết sớm · LS/LF: khởi/kết muộn · TF: dự trữ toàn phần · FF: dự trữ riêng · D: thời lượng${r.rows.some((t) => t.workers > 0) ? " · NC: người/ngày" : ""}.</div>`)+panel('Các liên kết găng',r.duration+' ngày làm việc',`<div class="panel-body">${criticalLinks(r)}</div>`);
   }
   function constructionControls(scope,index=-1){
     let group='';const options=ConstructionSequence.steps.map((step,i)=>{let html='';if(group!==step.group){if(group)html+='</optgroup>';group=step.group;html+='<optgroup label="'+escape(group)+'">';}return html+`<option value="${i}" ${index===i?'selected':''}>${i+1}. ${escape(step.name)}</option>`;}).join('')+'</optgroup>';
@@ -1321,7 +1321,33 @@
       for(const key of keys){const section=document.createElement('section');section.className='report-sheet';section.dataset.reportLabel=key;const header=`<div class="report-title"><strong>QUẢN LÝ DỰ ÁN XÂY DỰNG</strong><span>${escape(project().name)} · ${new Date().toLocaleDateString('vi-VN',{timeZone:'Asia/Bangkok'})}</span></div>`;section.innerHTML=DOMPurify.sanitize(header+(current?$('#main').innerHTML:await printSectionHTML(key)));stage.append(section);
         // Preserve current form values in the static report; export controls are removed.
         section.querySelectorAll('button.gantt-label,button.gantt-bar').forEach(button=>{const div=document.createElement('div');div.className=button.className;div.style.cssText=button.style.cssText;div.innerHTML=button.innerHTML;button.replaceWith(div);});
-        section.querySelectorAll('.network-wrap svg').forEach(svg=>{const box=svg.getBBox(),width=Math.ceil(box.x+box.width+28),height=Math.ceil(box.y+box.height+28);if(width>1100||height>480){const wrap=svg.parentElement;svg.remove();const tileW=Math.min(1050,width),tileH=Math.min(460,height),xs=[],ys=[];for(let x=0;x<width;x+=tileW-160){xs.push(x);if(x+tileW>=width)break;}for(let y=0;y<height;y+=tileH-100){ys.push(y);if(y+tileH>=height)break;}let n=0;for(const y of ys)for(const x of xs){const part=document.createElement('div');part.className='report-network-tile';const label=document.createElement('p');label.textContent='Sơ đồ · phần '+(++n)+' / '+(xs.length*ys.length)+' · các phần chồng biên để theo dõi liên kết';part.append(label);const clone=svg.cloneNode(true);clone.setAttribute('viewBox',x+' '+y+' '+tileW+' '+tileH);clone.setAttribute('width',String(tileW));clone.setAttribute('height',String(tileH));clone.style.width='100%';clone.style.height='auto';part.append(clone);wrap.append(part);}}});
+        // Sơ đồ xuất NGUYÊN KHỐI (không chia ô): khung ôm sát nội dung, giữ cỡ thật để chữ đọc được.
+        // Sơ đồ rộng hơn trang thì nới rộng trang báo cáo (tối đa 2.400 px); rộng hơn nữa mới thu cả khối.
+        {
+          const CONTENT = 1050, MAX_SHEET = 2400, PAD = 24;
+          let widest = 0;
+          const diagrams = [...section.querySelectorAll('.network-wrap svg')];
+          for (const svg of diagrams) {
+            const box = svg.getBBox();
+            if (!box.width || !box.height) continue;
+            const w = Math.ceil(box.width + PAD * 2), h = Math.ceil(box.height + PAD * 2);
+            svg.setAttribute('viewBox', Math.floor(box.x - PAD) + ' ' + Math.floor(box.y - PAD) + ' ' + w + ' ' + h);
+            svg.setAttribute('width', String(w));
+            svg.setAttribute('height', String(h));
+            svg.dataset.naturalWidth = String(w);
+            const wrap = svg.closest('.network-wrap');
+            if (wrap) Object.assign(wrap.style, { overflow: 'visible', maxHeight: 'none', height: 'auto' });
+            widest = Math.max(widest, w);
+          }
+          const sheet = Math.min(MAX_SHEET, Math.max(1120, widest + 70 + 24));
+          if (widest > CONTENT) section.style.width = sheet + 'px';
+          for (const svg of diagrams) {
+            const w = Number(svg.dataset.naturalWidth || 0);
+            if (!w) continue;
+            // Vừa khung: giữ cỡ thật; quá rộng: thu cả khối theo bề rộng trang (không cắt).
+            Object.assign(svg.style, w <= sheet - 94 ? { width: w + 'px', height: 'auto', maxWidth: 'none' } : { width: '100%', height: 'auto', maxWidth: '100%' });
+          }
+        }
         section.querySelectorAll('button,.heading-actions,.panel-tools,.tabbar,.plan-submit,.camera-tools,.toast').forEach(e=>e.remove());
         section.querySelectorAll('input,select,textarea').forEach((input,index)=>{const live=current?$('#main').querySelectorAll('input,select,textarea')[index]:null;if(live){input.value=live.value;input.checked=live.checked;}const value=input.tagName==='SELECT'?input.selectedOptions[0]?.textContent:input.type==='checkbox'||input.type==='radio'?(input.checked?'Đã chọn':'Không chọn'):input.value;const span=document.createElement('span');span.className='report-field';span.textContent=value??'';input.replaceWith(span);});
         for(const [i,canvas]of [...section.querySelectorAll('canvas')].entries()){const original=$$('#main canvas')[i];if(original){const scene=[...BuildScene.instances].find(s=>s.canvas===original);scene?.renderer?.render(scene.scene,scene.camera);const img=document.createElement('img');img.src=original.toDataURL('image/png');img.style.width='100%';canvas.replaceWith(img);}else canvas.remove();}
