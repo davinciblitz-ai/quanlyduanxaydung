@@ -150,7 +150,7 @@ test('AOA trên bảng: 7 sự kiện đánh số 1–7, giả nét đứt, ch�
   assert.deepEqual([...new Set(g.nodes.filter((n) => n.critical).map((n) => p[n.key].y))].length, 1, 'critical events on one row');
   const svg = G.svg(g, p);
   assert.equal((svg.match(/stroke-dasharray="6 4"/g) || []).length, 1);
-  assert.ok(svg.includes('D (11, 0)') && !svg.includes('Giả 0'));
+  assert.ok(svg.includes('D (11)') && !svg.includes('D (11, 0)') && !svg.includes('Giả 0'));
   assert.equal((svg.match(/fill="#fff1e9"/g) || []).length, 5, 'critical events filled');
   checkRoutes(g, p);
   // Saved positions follow the event, not its index, when a task is added.

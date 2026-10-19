@@ -57,14 +57,16 @@
     }
   }
 
-  const arrowLabel = (a) =>
-    a.kind === 'dummy' ? '' : a.kind === 'lag' ? 'Chờ ' + number(a.duration) : a.task + ' (' + number(a.duration) + ', ' + number(a.workers || 0) + ')';
+  // (thời lượng, người/ngày); dự án không nhập nhân công thì chỉ ghi thời lượng.
+  const arrowLabel = (a, crew) =>
+    a.kind === 'dummy' ? '' : a.kind === 'lag' ? 'Chờ ' + number(a.duration) : a.task + ' (' + number(a.duration) + (crew ? ', ' + number(a.workers || 0) : '') + ')';
 
   function buildAoa(schedule) {
     const g = Networks.aoa(schedule.rows), grid = LAYOUT.aoa, keyOf = new Map(g.nodes.map((n) => [n.id, n.key]));
     const minRow = Math.min(0, ...g.nodes.map((n) => n.row));
     const nodes = g.nodes.map((n) => ({ ...n, x: grid.left + n.level * grid.col, y: grid.top + (n.row - minRow) * grid.row }));
-    const edges = g.arrows.map((a) => ({ ...a, event: { from: a.from, to: a.to }, from: keyOf.get(a.from), to: keyOf.get(a.to), label: arrowLabel(a) }));
+    const crew = schedule.rows.some((t) => t.workers > 0);
+    const edges = g.arrows.map((a) => ({ ...a, event: { from: a.from, to: a.to }, from: keyOf.get(a.from), to: keyOf.get(a.to), label: arrowLabel(a, crew) }));
     widenTerminals(nodes, edges, 'event:source', 'event:sink');
     return { kind: 'aoa', nodes, edges, duration: g.duration, dummies: g.dummies };
   }
@@ -79,7 +81,8 @@
     if (kind === 'aoa') return buildAoa(schedule);
     const style = options.style === 'card' ? 'card' : 'circle', T = schedule.duration;
     const terminal = (key, label, time) => ({ key, label, virtual: true, es: time, ef: time, ls: time, lf: time, tf: 0, ff: 0, duration: 0, critical: true });
-    const nodes = [terminal('@start', 'BĐ', 0), ...schedule.rows.map((t) => ({ ...t, key: t.id, label: t.id })), terminal('@finish', 'KT', T)];
+    const crew = schedule.rows.some((t) => t.workers > 0);
+    const nodes = [terminal('@start', 'BĐ', 0), ...schedule.rows.map((t) => ({ ...t, key: t.id, label: t.id, crew })), terminal('@finish', 'KT', T)];
     // The default relation FS+0 is implied by the arrow itself; label only lags and SS/FF/SF.
     const edges = schedule.edges.map((e, i) => ({ ...e, key: 'edge:' + i, label: e.type === 'FS' && e.lag === 0 ? '' : e.type + (e.lag >= 0 ? '+' : '') + e.lag }));
     const hasIn = new Set(schedule.edges.map((e) => e.to)), hasOut = new Set(schedule.edges.map((e) => e.from));
@@ -766,7 +769,7 @@
           .map(([label, value, x, y]) => `<text x="${x}" y="${y}" text-anchor="middle" font-size="10" fill="#345f8c">${label} ${number(value)}</text>`)
           .join('') +
         `<text y="50" text-anchor="middle" font-size="11" fill="#345f8c">TF ${number(n.tf)} · FF ${number(n.ff)}</text>` +
-        `<text y="66" text-anchor="middle" font-size="11" font-weight="600" fill="#315b87">D ${number(n.duration)} · NC ${number(n.workers || 0)}</text>` +
+        `<text y="66" text-anchor="middle" font-size="11" font-weight="600" fill="#315b87">D ${number(n.duration)}${n.crew === false ? '' : ' · NC ' + number(n.workers || 0)}</text>` +
         (name ? `<text y="81" text-anchor="middle" font-size="10" fill="#557493">${esc(name.length > 24 ? name.slice(0, 23) + '…' : name)}</text>` : '');
     }
     const aria = n.virtual ? 'Sự kiện ' + n.label : n.name || 'Sự kiện ' + n.label;
