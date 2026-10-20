@@ -32,26 +32,53 @@
     capacity: 30,
     maxDuration: 60,
     indirectPerDay: 0,
+    indirectOffset: 0,
     mobilizationRate: 0,
     allowCrash: false,
   };
   const EPS = 1e-9;
   const MAX_DAYS = 100000;
 
+  /**
+   * Chi phí gián tiếp khi dự án kéo dài T ngày: max(0, offset + mỗi ngày × T).
+   * Theo dự án: offset = indirectBase − dailySaving × T(CPM), tức đúng mô hình CT.optimize
+   * (indirectBase tại thời gian CPM, bớt dailySaving cho mỗi ngày rút ngắn). Không giảm theo T.
+   */
+  const indirectAt = (o, T) => Math.max(0, (o.indirectOffset || 0) + (o.indirectPerDay || 0) * T);
+
   function options(value = {}, project = {}) {
     const base = CT.schedule(project.tasks || []);
+    const auto = Math.min(3000, Math.max(base.duration, Math.ceil(base.duration * 1.25)));
+    // Hạn tự đặt (125% CPM) khi người dùng chưa nhập; lưu nguồn để báo cáo không coi là số liệu đề bài.
+    const deadlineAuto = value.maxDuration == null || value.deadlineAuto === true;
     const o = {
       ...defaults,
       capacity: project.capacity ?? 30,
-      maxDuration: Math.min(3000, Math.max(base.duration, Math.ceil(base.duration * 1.25))),
       ...value,
+      maxDuration: deadlineAuto ? auto : value.maxDuration,
+      deadlineAuto,
+      deadlineBase: base.duration,
     };
+    // Gián tiếp: mặc định lấy từ dự án (Chi phí & tối ưu); chỉ coi là nhập tay khi đánh dấu
+    // "manual" hoặc đơn giá/ngày khác dailySaving. Bản lưu cũ để 0 trong khi dự án có số liệu → theo dự án.
+    const saving = project.dailySaving ?? 0, per = value.indirectPerDay, source = value.indirectSource;
+    const manual =
+      source === "manual" ||
+      (source !== "project" && per != null && per !== saving && !(source == null && per === 0 && saving > 0));
+    if (manual) Object.assign(o, { indirectSource: "manual", indirectOffset: 0 });
+    else
+      Object.assign(o, {
+        indirectSource: "project",
+        indirectPerDay: saving,
+        indirectOffset: (project.indirectBase ?? 0) - saving * base.duration,
+      });
     if (Object.hasOwn(LEGACY_PRIORITY, o.priority)) o.priority = LEGACY_PRIORITY[o.priority];
     if (!MODES.includes(o.strategy) || !GOALS.includes(o.goal) || !PRIORITIES.includes(o.priority))
       throw Error("Lựa chọn cách xếp hoặc mục tiêu không hợp lệ.");
     CT.number(o.capacity, "Giới hạn nhân công", 0, 100000, true);
     CT.number(o.maxDuration, "Hạn hoàn thành", 0, 100000, true);
     CT.number(o.indirectPerDay, "Gián tiếp/ngày");
+    CT.number(o.indirectOffset, "Gián tiếp cố định", -1e15, 1e15);
     CT.number(o.mobilizationRate, "Huy động/người");
     if (typeof o.allowCrash !== "boolean") throw Error("Cấu hình rút ngắn không hợp lệ.");
     return o;
@@ -141,8 +168,9 @@
       sumSquares,
       unimodal: variation - 2 * peak < 1e-8,
       average,
-      k1: average ? peak / average : 0,
-      k2: work ? surplus / work : 0,
+      // Không có nhân công (Rtb = 0, S = 0): K1, K2 không xác định → null (không phải 0).
+      k1: average > 0 ? peak / average : null,
+      k2: work > 0 ? surplus / work : null,
     };
   }
 
@@ -173,7 +201,7 @@
     if (m.duration > o.maxDuration)
       issues.push({ kind: "deadline", message: "Vượt hạn hoàn thành " + (m.duration - o.maxDuration) + " ngày." });
     const direct = tasks.reduce((s, t) => s + t.cost, 0);
-    const indirect = m.duration * o.indirectPerDay, mobilization = m.mobilizations * o.mobilizationRate;
+    const indirect = indirectAt(o, m.duration), mobilization = m.mobilizations * o.mobilizationRate;
     return {
       valid: issues.length === 0,
       issues,
@@ -227,7 +255,49 @@
 
   // ---------- Mô hình số cho bộ giải ----------
 
-  function model(tasks, o) {
+  /**
+   * Tiến độ thực tế cho bộ giải: công tác đã bắt đầu hoặc đã xong (progress > 0) giữ mốc bắt đầu
+   * của lịch đang áp dụng (Planner.active); công tác chưa làm không bắt đầu trước ngày báo cáo,
+   * trừ khi công tác sau nó đã bắt đầu (số liệu ngược trình tự) — khi đó chỉ nới đủ để không mâu thuẫn.
+   * null: chưa có công tác nào ghi tiến độ. applied=false: mốc thực tế mâu thuẫn quan hệ, bỏ qua.
+   */
+  function progressLimits(project) {
+    const tasks = project.tasks || [], n = tasks.length;
+    const statusDay = Number.isFinite(project.statusDay) && project.statusDay > 0 ? Math.ceil(project.statusDay) : 0;
+    const started = tasks.filter((t) => t.progress > 0);
+    // Chưa ghi % hoàn thành nào: coi là lập kế hoạch từ mốc 0 (ngày báo cáo chỉ dùng cho EVM), không dời lịch.
+    if (!started.length) return null;
+    const r = CT.schedule(tasks), index = new Map(tasks.map((t, i) => [t.id, i]));
+    const current = started.length ? new Map(active(project).rows.map((x) => [x.id, x.es])) : null;
+    const fixed = tasks.map((t) => (t.progress > 0 && Number.isInteger(current.get(t.id)) ? current.get(t.id) : -1));
+    const preds = tasks.map(() => []), succs = tasks.map(() => []);
+    for (const e of r.edges) {
+      const a = index.get(e.from), b = index.get(e.to);
+      preds[b].push([a, e.w]);
+      succs[a].push([b, e.w]);
+    }
+    const order = r.order.map((id) => index.get(id)), cap = new Array(n).fill(Infinity);
+    for (let k = n - 1; k >= 0; k--) {
+      const i = order[k];
+      for (const [j, w] of succs[i]) cap[i] = Math.min(cap[i], (fixed[j] >= 0 ? fixed[j] : cap[j]) - w);
+    }
+    const release = tasks.map((t, i) => (fixed[i] >= 0 ? fixed[i] : Math.max(0, Math.min(statusDay, cap[i]))));
+    const early = new Array(n);
+    let applied = true;
+    for (const i of order) {
+      let v = Math.max(r.rows[i].es, release[i]);
+      for (const [j, w] of preds[i]) v = Math.max(v, early[j] + w);
+      if (fixed[i] >= 0 && v > fixed[i]) applied = false;
+      early[i] = v;
+    }
+    return {
+      statusDay, applied, fixed, release,
+      pinned: tasks.filter((t, i) => fixed[i] >= 0).map((t) => t.id),
+      early: tasks.filter((t, i) => fixed[i] < 0 && release[i] < statusDay).map((t) => t.id),
+    };
+  }
+
+  function model(tasks, o, limits = null) {
     const r = CT.schedule(tasks), n = tasks.length;
     const index = new Map(tasks.map((t, i) => [t.id, i]));
     const dur = tasks.map((t) => t.duration);
@@ -241,7 +311,15 @@
     const order = r.order.map((id) => index.get(id));
     const position = new Array(n);
     order.forEach((i, k) => (position[i] = k));
+    // Tiến độ thực tế (nếu có): fixed[i] ≥ 0 là mốc giữ nguyên, release[i] là mốc sớm nhất được phép.
+    const fixed = limits ? limits.fixed : null, release = limits ? limits.release : null;
     const early = r.rows.map((t) => t.es);
+    if (limits)
+      for (const i of order) {
+        let v = Math.max(early[i], release[i]);
+        for (const [j, w] of preds[i]) v = Math.max(v, early[j] + w);
+        early[i] = v;
+      }
     const H = o.maxDuration;
     // Bắt đầu muộn nhất theo hạn (chỉ xét quan hệ) và đường dài nhất từ đầu công tác tới cuối dự án.
     const late = new Array(n), tail = new Array(n);
@@ -252,15 +330,18 @@
         lv = Math.min(lv, late[j] - w);
         tv = Math.max(tv, w + tail[j]);
       }
-      late[i] = lv;
+      late[i] = fixed && fixed[i] >= 0 ? Math.min(lv, fixed[i]) : lv;
       tail[i] = tv;
     }
+    // Cận dưới thời gian: CPM, và khi có tiến độ thì mốc sớm nhất được phép + đường dài nhất phía sau.
+    let cpm = r.duration;
+    if (limits) for (let i = 0; i < n; i++) cpm = Math.max(cpm, early[i] + tail[i]);
     const totalDur = dur.reduce((s, d) => s + d, 0);
     return {
-      tasks, n, dur, wk, preds, succs, order, position, early, late, tail, H,
-      L: Math.min(MAX_DAYS, Math.max(H, r.duration) + totalDur + 1),
+      tasks, n, dur, wk, preds, succs, order, position, early, late, tail, H, fixed, release,
+      L: Math.min(MAX_DAYS, Math.max(H, cpm) + totalDur + 1),
       maxDur: Math.max(0, ...dur),
-      cpm: r.duration,
+      cpm,
       direct: tasks.reduce((s, t) => s + t.cost, 0),
       C: o.capacity,
       work: tasks.reduce((s, t) => s + t.duration * t.workers, 0),
@@ -278,13 +359,16 @@
     for (let x = s, e = s + M.dur[i]; x < e; x++) if (load[x] + w > cap) return false;
     return true;
   }
+  // Công tác giữ mốc (đã bắt đầu/xong) có lowBound ≥ mốc và highBound ≤ mốc nên không dịch được;
+  // công tác chưa làm không xuống dưới ngày báo cáo.
   function lowBound(M, S, i) {
-    let v = 0;
+    let v = M.release ? M.release[i] : 0;
     for (const [j, w] of M.preds[i]) if (S[j] + w > v) v = S[j] + w;
     return v;
   }
   function highBound(M, S, i, limit) {
     let v = limit - M.dur[i];
+    if (M.fixed && M.fixed[i] >= 0 && M.fixed[i] < v) v = M.fixed[i];
     for (const [j, w] of M.succs[i]) if (S[j] - w < v) v = S[j] - w;
     return v;
   }
@@ -308,7 +392,7 @@
       if (v > prev) mob += v - prev;
       prev = v;
     }
-    const cost = M.direct + o.indirectPerDay * T + o.mobilizationRate * mob;
+    const cost = M.direct + indirectAt(o, T) + o.mobilizationRate * mob;
     return keyOf(obj, Math.max(0, T - M.H), T, peak, sumSq, mob, cost);
   }
 
@@ -332,6 +416,9 @@
     const { n, dur, wk, succs } = M, S = new Int32Array(n), load = new Float64Array(M.L + 1);
     const waiting = M.preds.map((p) => p.length), eligible = [];
     for (let i = 0; i < n; i++) if (!waiting[i]) eligible.push(i);
+    // Công tác giữ mốc chiếm nhân lực trước để công tác chưa làm xếp quanh chúng.
+    const pinned = (i) => M.fixed && M.fixed[i] >= 0;
+    for (let i = 0; i < n; i++) if (pinned(i)) addLoad(M, load, i, M.fixed[i], 1);
     for (let k = 0; k < n; k++) {
       let pick = 0;
       for (let e = 1; e < eligible.length; e++)
@@ -339,6 +426,11 @@
       const i = eligible[pick];
       eligible[pick] = eligible[eligible.length - 1];
       eligible.pop();
+      if (pinned(i)) {
+        S[i] = M.fixed[i];
+        for (const [j] of succs[i]) if (--waiting[j] === 0) eligible.push(j);
+        continue;
+      }
       let s = lowBound(M, S, i);
       if (wk[i]) {
         for (;;) {
@@ -443,7 +535,7 @@
         const a = D(s), b = D(s + d);
         mob = mobO + Math.max(0, a + w) - Math.max(0, a) + Math.max(0, b - w) - Math.max(0, b);
       }
-      const cost = M.direct + o.indirectPerDay * T + o.mobilizationRate * mob;
+      const cost = M.direct + indirectAt(o, T) + o.mobilizationRate * mob;
       const key = keyOf(obj, Math.max(0, T - M.H), T, peak, sumSq, mob, cost);
       budget.count++;
       if (s === cur) curKey = key;
@@ -474,11 +566,31 @@
     return evaluate(M, S, o, obj);
   }
 
+  /**
+   * Dời một công tác cùng mọi công tác sau nó (bao đóng) sang phải δ ngày trong hạn: quan hệ luôn giữ,
+   * giúp thoát kẹt khi từng công tác riêng lẻ bị công tác sau chặn. Vượt năng lực thì hoàn lại.
+   */
+  function shiftBlock(M, S, random, movable) {
+    const i = movable[Math.floor(random() * movable.length)], block = [i], seen = new Set(block);
+    for (let k = 0; k < block.length; k++)
+      for (const [j] of M.succs[block[k]]) if (!seen.has(j)) seen.add(j), block.push(j);
+    if (block.some((j) => M.fixed[j] >= 0)) return;
+    const room = M.H - Math.max(...block.map((j) => S[j] + M.dur[j]));
+    if (room <= 0) return;
+    const delta = 1 + Math.floor(random() * room);
+    for (const j of block) S[j] += delta;
+    if (!fits1(M, S)) for (const j of block) S[j] -= delta;
+  }
+
   function perturb(M, S, random, strength) {
+    // Chỉ xáo công tác còn dịch được (bỏ công tác giữ mốc theo tiến độ thực tế).
+    const movable = M.fixed ? M.fixed.map((v, i) => (v >= 0 ? -1 : i)).filter((i) => i >= 0) : null;
+    if (movable && !movable.length) return;
+    if (movable && random() < 0.5) shiftBlock(M, S, random, movable);
     const T = makespan(M, S), limit = Math.max(M.H, T);
     const load = loadOf(M, S, limit + M.maxDur + 2);
     for (let k = 0; k < strength; k++) {
-      const i = Math.floor(random() * M.n);
+      const i = movable ? movable[Math.floor(random() * movable.length)] : Math.floor(random() * M.n);
       addLoad(M, load, i, S[i], -1);
       const lo = lowBound(M, S, i), hi = highBound(M, S, i, limit);
       for (let tries = 0; tries < 8 && hi > lo; tries++) {
@@ -560,7 +672,8 @@
     let bestKey = incumbent ? incumbent.slice() : null, nodes = 0, stopped = false;
     const bound = (peak, sumSq, T) => {
       if (obj === "time") return [0, T, peak, sumSq];
-      if (obj === "cost") return [0, M.direct + o.indirectPerDay * T + o.mobilizationRate * peak, peak, sumSq];
+      // indirectAt không giảm theo T nên vẫn là cận dưới hợp lệ.
+      if (obj === "cost") return [0, M.direct + indirectAt(o, T) + o.mobilizationRate * peak, peak, sumSq];
       return [0, peak, T, sumSq];
     };
     // Cận dưới chưa chắc tệ hơn: dừng khi một thành phần lớn hơn, đi tiếp khi bằng.
@@ -660,6 +773,8 @@
     const index = new Map(tasks.map((t, i) => [t.id, i]));
     const S = tasks.map((t) => plan.starts[t.id]), dur = tasks.map((t) => t.duration);
     const wk = tasks.map((t) => (t.duration ? t.workers : 0));
+    // Đã xong 100%: không còn dự trữ để dời và không tính là găng của phương án.
+    const done = tasks.map((t) => t.progress >= 100);
     const duration = Math.max(0, ...tasks.map((t, i) => S[i] + dur[i]));
     const succs = tasks.map(() => []), preds = tasks.map(() => []);
     for (const e of base.edges) {
@@ -702,7 +817,8 @@
       const i = ready.splice(pick, 1)[0];
       let hi = duration - dur[i];
       for (const [j, w] of succs[i]) hi = Math.min(hi, late[j] - w);
-      if (limited && wk[i]) {
+      if (done[i]) late[i] = S[i];
+      else if (limited && wk[i]) {
         for (let x = S[i]; x < S[i] + dur[i]; x++) load[x] -= wk[i];
         let s = hi;
         while (s > S[i] && !fitsAt(i, s)) s--;
@@ -717,7 +833,9 @@
         ...t,
         cpmEs: t.es, cpmEf: t.ef, cpmLs: t.ls, cpmLf: t.lf, cpmTf: t.tf, cpmFf: t.ff, cpmCritical: t.critical,
         es: S[i], ef: S[i] + dur[i], ls: late[i], lf: late[i] + dur[i],
-        tf: late[i] - S[i], ff: ff[i], critical: late[i] === S[i],
+        ...(done[i]
+          ? { tf: 0, ff: 0, critical: false, done: true }
+          : { tf: late[i] - S[i], ff: ff[i], critical: late[i] === S[i] }),
       };
     });
     const map = new Map(rows.map((t) => [t.id, t]));
@@ -772,16 +890,42 @@
   }
 
   /** Cận dưới lý thuyết để người dùng thấy khoảng cách tới tối ưu. */
-  function lowerBounds(original, o) {
-    const floors = effective(original, o.allowCrash ? Object.fromEntries(original.map((t) => [t.id, durationFloor(t)])) : {});
+  function lowerBounds(original, o, limits = null) {
+    const crashable = original.filter((t) => !(limits && t.progress > 0));
+    const floors = effective(original, o.allowCrash ? Object.fromEntries(crashable.map((t) => [t.id, durationFloor(t)])) : {});
     const work = original.reduce((s, t) => s + t.duration * t.workers, 0);
     const integral = original.every((t) => Number.isInteger(t.workers));
     const maxCrew = Math.max(0, ...original.filter((t) => t.duration > 0).map((t) => t.workers));
     const spread = o.maxDuration > 0 ? work / o.maxDuration : 0;
     return {
       peak: Math.max(maxCrew, integral ? Math.ceil(spread - 1e-9) : spread),
-      duration: Math.max(CT.schedule(floors).duration, o.capacity > 0 ? Math.ceil(work / o.capacity - 1e-9) : 0),
+      duration: Math.max(
+        limits ? model(floors, o, limits).cpm : CT.schedule(floors).duration,
+        o.capacity > 0 ? Math.ceil(work / o.capacity - 1e-9) : 0,
+      ),
     };
+  }
+
+  /** ΣR² nhỏ nhất khi rải S ngày công đều nhất trên T ngày (ngày công nguyên: q hoặc q+1 người/ngày). */
+  function minSquares(S, T, integral) {
+    if (!(T > 0) || !(S > 0)) return 0;
+    if (!integral || !Number.isInteger(S)) return (S * S) / T;
+    const q = Math.floor(S / T), r = S - q * T;
+    return r * (q + 1) ** 2 + (T - r) * q * q;
+  }
+
+  /**
+   * Chứng minh tối ưu bằng cận dưới khi không duyệt đầy đủ (chỉ khi không rút ngắn, nên chi phí trực tiếp
+   * cố định): thời gian và đỉnh đạt cận dưới, ΣR² đạt mức nhỏ nhất, số người huy động = đỉnh (không thể ít hơn).
+   * Khi đó mọi thành phần của khóa so sánh (time / workforce / cost) đều không thể tốt hơn.
+   */
+  function certified(m, o, bounds, obj, integral) {
+    if (o.allowCrash || m.duration > o.maxDuration || m.duration > bounds.duration) return false;
+    if (m.peak > bounds.peak + EPS || m.mobilizations > m.peak + EPS) return false;
+    // Mục tiêu chi phí: nếu kéo dài không tốn thêm gián tiếp, lịch dài hơn (tới hạn) có thể đều hơn.
+    const T = obj === "cost" && !(indirectAt(o, m.duration + 1) > indirectAt(o, m.duration)) ? Math.max(m.duration, o.maxDuration) : m.duration;
+    const floor = minSquares(m.work, T, integral);
+    return m.sumSquares <= floor + 1e-9 * Math.max(1, floor);
   }
 
   function solve(project, input = {}, manualStarts = {}, limits = {}) {
@@ -790,11 +934,18 @@
     const base = CT.schedule(original);
     const basicStarts = Object.fromEntries(base.rows.map((t) => [t.id, t.es]));
     const basic = candidate(original, {}, basicStarts, o);
+    // Tiến độ thực tế (progress.applied: bộ giải có giữ mốc công tác đã bắt đầu/xong và
+    // không xếp công tác chưa làm trước ngày báo cáo hay không; xếp tay/cơ bản không áp).
+    const actual = progressLimits(project), held = actual && actual.applied ? actual : null;
+    const progress = actual && {
+      applied: !!held && o.strategy === "algorithm", statusDay: actual.statusDay,
+      pinned: held ? actual.pinned : [], early: held ? actual.early : [],
+    };
     if (o.strategy !== "algorithm") {
       const plan = o.strategy === "basic" ? basic : candidate(original, {}, manualStarts, o);
       return {
         options: o, basic, best: plan, alternatives: [plan], complete: true,
-        method: o.strategy, evaluated: 1, objective: objective(o),
+        method: o.strategy, evaluated: 1, objective: objective(o), progress,
         scope: "Thời lượng giữ nguyên; kiểm tra toàn bộ quan hệ.",
       };
     }
@@ -809,23 +960,27 @@
         return this.count >= this.max || Date.now() > this.deadline;
       },
     };
-    const bounds = lowerBounds(original, o);
+    const bounds = lowerBounds(original, o, held);
     const tooLarge = original.some((t) => t.workers > o.capacity && t.duration > 0);
     if (tooLarge)
       return {
         options: o, basic, best: null, alternatives: [], complete: true, method: "infeasible",
-        evaluated: 0, objective: obj, bounds,
+        evaluated: 0, objective: obj, bounds, progress,
         reason: "Có công tác cần nhiều người hơn năng lực. Việc dịch ngày không thể làm công tác đó khả thi.",
       };
     const ids = original.map((t) => t.id), random = makeRandom(20261019);
     const pool = makePool(original, o, ids);
-    if (basic.valid) pool.offer(rank(basic, o), {}, Int32Array.from(ids.map((id) => basicStarts[id])));
-    const crashable = o.allowCrash ? original.filter((t) => t.duration > durationFloor(t)) : [];
+    // Lịch CPM cơ bản chỉ vào danh sách khi tôn trọng tiến độ thực tế.
+    const keeps = (starts) =>
+      !held || ids.every((id, i) => (held.fixed[i] >= 0 ? starts[id] === held.fixed[i] : starts[id] >= held.release[i]));
+    if (basic.valid && keeps(basicStarts)) pool.offer(rank(basic, o), {}, Int32Array.from(ids.map((id) => basicStarts[id])));
+    // Công tác đã bắt đầu/xong không rút ngắn (thời lượng đã thực hiện).
+    const crashable = o.allowCrash ? original.filter((t) => t.duration > durationFloor(t) && !(held && t.progress > 0)) : [];
     const baseDurations = Object.fromEntries(original.map((t) => [t.id, t.duration]));
     const runFixed = (durations, quick) => {
       const tasks = effective(original, durations);
       if (tasks.some((t) => t.duration > 0 && t.workers > o.capacity)) return null;
-      const M = model(tasks, o);
+      const M = model(tasks, o, held);
       const best = optimizeFixed(M, o, obj, budget, random, quick, (S, key) => pool.offer(key, durations, S));
       return best && { ...best, durations };
     };
@@ -836,7 +991,7 @@
     let complete = false, nodes = 0;
     const combos = crashable.reduce((s, t) => s * (t.duration - durationFloor(t) + 1), 1);
     // Ước lượng miền tìm kiếm (tích số mốc bắt đầu có thể); quá lớn thì để heuristic xử lý.
-    const baseModel = model(original, o);
+    const baseModel = model(original, o, held);
     const logSpace = baseModel.late.reduce((s, v, i) => s + Math.log(Math.max(1, v - baseModel.early[i] + 1)), Math.log(combos));
     if (original.length <= 10 && combos <= 256 && logSpace <= Math.log(2e7) && !budget.out()) {
       const exactBudget = {
@@ -855,7 +1010,7 @@
       for (const durations of durationVectors(original, crashable)) {
         const tasks = effective(original, durations);
         if (tasks.some((t) => t.duration > 0 && t.workers > o.capacity)) continue;
-        const M = model(tasks, o);
+        const M = model(tasks, o, held);
         const r = exact(M, o, obj, exactBudget, bestKey, (S, key) => pool.offer(key, durations, S));
         nodes += r.nodes;
         if (r.bestKey && (!bestKey || compareKeys(r.bestKey, bestKey) < 0)) bestKey = r.bestKey;
@@ -900,16 +1055,20 @@
             ? "Đã duyệt đầy đủ: không có lịch nào thỏa đồng thời năng lực và hạn hoàn thành."
             : "Chưa tìm được lịch thỏa năng lực và hạn trong thời gian cho phép. Điều này chưa chứng minh bài toán vô nghiệm.";
     }
+    // Không duyệt đầy đủ nhưng mọi chỉ tiêu đạt cận dưới lý thuyết → vẫn chứng minh được tối ưu.
+    const integral = original.every((t) => Number.isInteger(t.workers));
+    const method = complete ? "exhaustive" : best && certified(best.metrics, o, bounds, obj, integral) ? "bound" : "heuristic";
     return {
       options: o, basic, best, nearest, alternatives: plans.slice(0, 5), complete,
-      method: complete ? "exhaustive" : "heuristic",
+      method,
       evaluated: budget.count, nodes, elapsedMs: Date.now() - started,
-      objective: obj, bounds, reason,
+      objective: obj, bounds, reason, progress,
     };
   }
 
   return {
     defaults, options, objective, fingerprint, effective, profile, metrics, inspect, candidate,
     rank, score: rank, compare, compareKeys, result, active, validate, solve, lowerBounds,
+    indirectAt, progressLimits,
   };
 });

@@ -334,31 +334,34 @@
         irr = (lo + hi) / 2;
       }
     }
-    let total = flows[0],
-      payback = null;
-    for (let i = 1; i < flows.length; i++) {
-      const before = total;
-      total += flows[i];
-      if (payback === null && before < 0 && total >= 0 && flows[0] < 0)
-        payback = i - 1 + -before / flows[i];
-    }
+    // valid: có ít nhất một khoản âm (vốn bỏ ra) và một khoản dương (thu về); empty: mọi kỳ đều bằng 0.
+    // Hoàn vốn chỉ tính khi valid, nên null khi valid nghĩa là duy nhất "chưa hoàn vốn đến kỳ cuối".
+    const valid = flows.some((x) => x < 0) && flows.some((x) => x > 0),
+      empty = flows.every((x) => x === 0);
+    // Kỳ hoàn vốn (nội suy tuyến tính) tính từ kỳ 0: lũy kế từ âm trở lại ≥ 0; lũy kế không bao giờ âm → 0.
+    const recovery = (values) => {
+      const eps = 1e-9 * Math.max(...values.map(Math.abs));
+      let total = 0, negative = false;
+      for (let i = 0; i < values.length; i++) {
+        const before = total;
+        total += values[i];
+        if (before < 0 && values[i] > 0 && total >= -eps) return Math.min(i, i - 1 + -before / values[i]);
+        if (total < 0) negative = true;
+      }
+      return negative ? null : 0;
+    };
+    const r = annualRate / 100,
+      pvs = flows.map((f, i) => f / Math.pow(1 + r, i));
     // Hoàn vốn có chiết khấu: cộng dồn giá trị hiện tại từng kỳ.
-    const r = annualRate / 100;
-    let pvTotal = flows[0], discountedPayback = null;
-    for (let i = 1; i < flows.length; i++) {
-      const before = pvTotal, pv = flows[i] / Math.pow(1 + r, i);
-      pvTotal += pv;
-      if (discountedPayback === null && before < 0 && pvTotal >= 0 && flows[0] < 0)
-        discountedPayback = i - 1 + -before / pv;
-    }
+    const payback = valid ? recovery(flows) : null,
+      discountedPayback = valid ? recovery(pvs) : null;
     // PI = PV dòng thu / PV dòng chi (giá trị tuyệt đối).
     let pvIn = 0, pvOut = 0;
-    flows.forEach((f, i) => {
-      const pv = f / Math.pow(1 + r, i);
+    pvs.forEach((pv) => {
       if (pv > 0) pvIn += pv;
       else pvOut -= pv;
     });
-    return { npv: npv(flows, r), irr, irrNote, payback, discountedPayback, pi: pvOut > 0 ? pvIn / pvOut : null };
+    return { npv: npv(flows, r), irr, irrNote, payback, discountedPayback, pi: pvOut > 0 ? pvIn / pvOut : null, valid, empty };
   }
   function evm(rows, statusDay) {
     number(statusDay, "Ngày báo cáo", 0, 100000, true);

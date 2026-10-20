@@ -22,7 +22,8 @@ window.Samples = (() => {
     minDuration,
     crashSlope,
     owner,
-    actualCost: (cost * progress) / 100,
+    // AC không suy ra từ EV (nếu không CPI luôn = 1,00 giả); mẫu nào có tiến độ tự gán AC riêng.
+    actualCost: 0,
     group: "Thi công",
   });
   const base = (name, currency = "VND") => ({
@@ -253,6 +254,12 @@ window.Samples = (() => {
         stage: 1,
       },
     ];
+    // Chi phí thực tế mẫu (AC) của các công việc đã bắt đầu, khác giá trị đạt được (EV):
+    // vượt ngân sách ở B, C (mưa, bơm thoát nước hố móng) và E; tiết kiệm ở A, D, M. Tổng AC 101,78 tr, CPI ≈ 0,95.
+    const actual = { A: 11650000, B: 19200000, C: 21480000, D: 14350000, E: 27300000, M: 7800000 };
+    p.tasks.forEach((task) => (task.actualCost = actual[task.id] || 0));
+    // Số liệu minh họa (quy mô rút gọn), không phải dự toán/tiến độ thật: báo cáo xuất ghi chú theo cờ này.
+    p.sample = true;
     p.boq = [
       {
         id: "Q1",

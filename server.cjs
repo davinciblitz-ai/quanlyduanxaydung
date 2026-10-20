@@ -195,6 +195,7 @@ const PROJECT_FIELDS = [
   "currency",
   "start",
   "workdays",
+  "holidays",
   "statusDay",
   "capacity",
   "indirectBase",
@@ -207,13 +208,15 @@ const PROJECT_FIELDS = [
   "baseline",
   "planning",
   "networkLayouts",
+  "sample",
 ];
 function validateProject(p) {
   text(p.id, "Mã dự án", 1, 64);
   if (!/^[A-Za-z0-9_-]+$/.test(p.id)) fail(400, "Mã dự án không hợp lệ.");
   text(p.name, "Tên dự án", 1, 160);
   if (!["VND", "USD"].includes(p.currency)) fail(400, "Loại tiền không hợp lệ.");
-  CT.dateAt(p.start, 0, p.workdays);
+  if (p.sample !== undefined && typeof p.sample !== "boolean") fail(400, "Cờ dữ liệu mẫu không hợp lệ.");
+  CT.dateAt(p.start, 0, p.workdays, p.holidays);
   if (new Set(p.workdays).size !== p.workdays.length) fail(400, "Ngày làm việc trùng lặp.");
   CT.number(p.statusDay, "Ngày báo cáo", 0, 100000, true);
   CT.number(p.capacity, "Năng lực", 0, 100000, true);

@@ -1,4 +1,8 @@
 const assert = require("node:assert/strict"), P = require("../planner.js"), CT = require("../engine.js");
+const fs = require("node:fs"), vm = require("node:vm"), crypto = require("node:crypto");
+const sampleContext = { window: {}, crypto, CT };
+vm.runInNewContext(fs.readFileSync(require.resolve("../samples.js"), "utf8"), sampleContext);
+const Samples = sampleContext.window.Samples;
 const t = (id, duration, workers, deps = "") => ({
   id, name: id, duration, minDuration: duration, workers, deps: CT.parseDeps(deps),
   cost: 100, actualCost: 0, progress: 0, crashSlope: 0,
@@ -172,7 +176,10 @@ test("Kết quả 'duyệt đầy đủ' khớp phép liệt kê độc lập (3
       strategy: "algorithm", goal: objective === "time" ? "analyze" : "optimize", priority: objective === "time" ? "workforce" : objective,
       capacity: 6 + (k % 3), maxDuration: base + 2, indirectPerDay: 15, mobilizationRate: 7, allowCrash: k % 4 === 0,
     };
-    const o = P.options(input, { tasks: ts }), r = P.solve({ tasks: ts }, o), brute = bruteForce(ts, o);
+    // Ví dụ lẻ: gián tiếp theo dự án (offset âm) để kiểm cận dưới chi phí của nhánh-cận.
+    const proj = k % 2 ? { tasks: ts, indirectBase: 40, dailySaving: 15 } : { tasks: ts };
+    const o = P.options(input, proj), r = P.solve(proj, o), brute = bruteForce(ts, o);
+    assert.equal(o.indirectSource, k % 2 ? "project" : "manual");
     if (!r.complete) continue;
     checked++;
     if (!brute) {
@@ -215,6 +222,107 @@ test("Bài lớn chạy trong giới hạn thời gian và không làm xấu hơ
   assert.ok(r.best.valid);
   assert.ok(r.best.metrics.peak <= r.basic.metrics.peak);
   assert.ok(r.best.metrics.sumSquares <= r.basic.metrics.sumSquares);
+});
+
+test("K1, K2 không xác định (null, không phải 0) khi không có nhân công", () => {
+  for (const crew of [[0, 0, 0], []]) {
+    const m = P.metrics(crew);
+    assert.equal(m.k1, null);
+    assert.equal(m.k2, null);
+  }
+  const r = P.solve(Samples.group(), { strategy: "basic" });
+  assert.equal(r.best.metrics.k1, null);
+  assert.equal(r.best.metrics.k2, null);
+});
+
+test("Gián tiếp theo dự án: indirectBase tại CPM ± dailySaving/ngày, khớp CT.optimize (bài A–G)", () => {
+  const ag = Samples.group(), o = P.options({}, ag);
+  assert.equal(o.indirectSource, "project");
+  assert.equal(o.indirectPerDay, 50);
+  assert.equal(o.indirectOffset, 400 - 50 * 25);
+  assert.equal(P.indirectAt(o, 25), 400);
+  assert.equal(P.indirectAt(o, 22), 250);
+  assert.equal(P.options(o, ag).indirectSource, "project", "đọc lại cấu hình giữ nguồn dự án");
+  assert.equal(P.options({ indirectPerDay: 0 }, ag).indirectSource, "project", "bản lưu cũ để 0 → lấy theo dự án");
+  const manual = P.options({ indirectPerDay: 10 }, ag);
+  assert.deepEqual([manual.indirectSource, manual.indirectOffset, P.indirectAt(manual, 25)], ["manual", 0, 250]);
+  const same = P.options({ ...o, indirectSource: "manual" }, ag);
+  assert.deepEqual([same.indirectSource, same.indirectOffset, P.indirectAt(same, 25)], ["manual", 0, 1250]);
+  const basic = P.solve(ag, { strategy: "basic" }).best;
+  assert.deepEqual([basic.metrics.duration, basic.costs.direct, basic.costs.indirect, basic.costs.total], [25, 450, 400, 850]);
+  const r = P.solve(ag, { strategy: "algorithm", goal: "optimize", priority: "cost", allowCrash: true }, {}, { maxMs: 3000 });
+  const c = r.best.costs, opt = CT.optimize(ag.tasks, ag.indirectBase, ag.dailySaving).best;
+  assert.deepEqual([r.best.metrics.duration, c.direct, c.indirect, c.total], [22, 525, 250, 775]);
+  assert.deepEqual([opt.duration, opt.total], [22, 775]);
+  const toa = P.options({}, Samples.construction());
+  assert.equal(P.indirectAt(toa, 55), 30000000);
+  assert.equal(P.indirectAt(toa, 64), 39000000);
+});
+
+test("Tiến độ thực tế: việc đã xong/đang làm giữ mốc, việc chưa làm từ ngày báo cáo (tòa 12 tầng)", () => {
+  const p = Samples.construction(), cpm = CT.schedule(p.tasks);
+  const r = P.solve(p, { strategy: "algorithm", goal: "optimize", priority: "workforce" }, {}, { maxMs: 1500 });
+  assert.equal(r.progress.applied, true);
+  assert.equal(r.progress.statusDay, 12);
+  assert.ok(r.best && r.best.valid);
+  assert.equal(r.best.starts.M, 5, "M đã xong 100%: giữ mốc CPM 5, không dời sang 13");
+  for (const t of p.tasks)
+    if (t.progress > 0) assert.equal(r.best.starts[t.id], cpm.rows.find((x) => x.id === t.id).es, t.id);
+    else assert.ok(r.best.starts[t.id] >= 12, t.id + " chưa làm không được xếp trước ngày báo cáo");
+  const s = P.result(P.effective(p.tasks, r.best.durations), r.best, r.options.capacity);
+  for (const row of s.rows)
+    if (p.tasks.find((t) => t.id === row.id).progress >= 100)
+      assert.deepEqual([row.done, row.tf, row.ff, row.critical], [true, 0, 0, false], row.id);
+    else assert.equal(row.done, undefined);
+  assert.ok(!s.critical.some((id) => ["A", "B", "C", "D", "M"].includes(id)));
+  const crash = P.solve(p, { strategy: "algorithm", goal: "optimize", priority: "cost", allowCrash: true }, {}, { maxMs: 800 });
+  for (const t of p.tasks) if (t.progress > 0) assert.equal(crash.best.durations[t.id], t.duration, t.id + " đã làm: không rút");
+  // Không có tiến độ và ngày báo cáo 0 (bài tập): không ràng buộc gì.
+  assert.equal(P.progressLimits({ ...p, statusDay: 0, tasks: p.tasks.map((t) => ({ ...t, progress: 0 })) }), null);
+  assert.equal(P.solve(Samples.group(), { strategy: "algorithm" }).progress, null);
+});
+
+test("Ngày báo cáo (khi đã ghi tiến độ): việc chưa làm không bắt đầu sớm hơn; số liệu ngược trình tự chỉ nới vừa đủ", () => {
+  const two = { tasks: [t("A", 2, 1), t("B", 2, 1, "A")], capacity: 5, statusDay: 3 };
+  const r = P.solve(two, { strategy: "algorithm", maxDuration: 10 });
+  // Chưa ghi % hoàn thành nào: lập kế hoạch từ mốc 0, ngày báo cáo không dời lịch.
+  assert.equal(r.progress, null);
+  assert.deepEqual(r.best.starts, { A: 0, B: 2 });
+  const live = { tasks: [{ ...t("A", 2, 1), progress: 100 }, t("B", 2, 1, "A"), t("C", 2, 1)], capacity: 5, statusDay: 3 };
+  const w = P.solve(live, { strategy: "algorithm", maxDuration: 10 });
+  assert.equal(w.method, "exhaustive");
+  assert.equal(w.progress.applied, true);
+  assert.deepEqual(w.best.starts, { A: 0, B: 3, C: 3 });
+  assert.equal(w.bounds.duration, 5);
+  const odd = { tasks: [t("A", 2, 1), { ...t("B", 2, 1, "A"), progress: 50 }], capacity: 5, statusDay: 5 };
+  const q = P.solve(odd, { strategy: "algorithm", maxDuration: 10 });
+  assert.deepEqual([q.progress.applied, q.progress.pinned, q.progress.early], [true, ["B"], ["A"]]);
+  assert.deepEqual(q.best.starts, { A: 0, B: 2 });
+});
+
+test("Chứng minh tối ưu bằng cận dưới khi không duyệt đầy đủ (method 'bound')", () => {
+  const ak = P.solve(Samples.exerciseAK(), { strategy: "algorithm" }, {}, { maxMs: 1500 });
+  assert.equal(ak.complete, false);
+  assert.equal(ak.method, "bound", "không có nhân công, thời gian bằng cận dưới CPM");
+  assert.equal(ak.best.metrics.duration, ak.bounds.duration);
+  const many = { tasks: Array.from({ length: 11 }, (_, i) => t("T" + i, 1, 1)), capacity: 11 };
+  const r = P.solve(many, { strategy: "algorithm", goal: "optimize", priority: "workforce", maxDuration: 1 });
+  assert.equal(r.method, "bound");
+  assert.equal(P.solve(many, { strategy: "algorithm", maxDuration: 1, allowCrash: true }).method, "heuristic");
+  const early = P.solve(project, { strategy: "algorithm", capacity: 9, maxDuration: 15 }, {}, { maxMs: 0, maxEvaluations: 1 });
+  if (early.method === "bound") {
+    assert.equal(early.best.metrics.peak, early.bounds.peak);
+    assert.equal(early.best.metrics.duration, early.bounds.duration);
+  } else assert.equal(early.method, "heuristic");
+});
+
+test("Hạn tự đặt 125% CPM được đánh dấu; hạn nhập tay thì không", () => {
+  const a = P.options({}, project);
+  assert.deepEqual([a.maxDuration, a.deadlineAuto, a.deadlineBase], [8, true, 6]);
+  assert.equal(P.options(a, project).deadlineAuto, true, "đọc lại cấu hình vẫn là tự đặt");
+  const b = P.options({ maxDuration: 8 }, project);
+  assert.deepEqual([b.maxDuration, b.deadlineAuto, b.deadlineBase], [8, false, 6]);
+  assert.equal(P.options({ ...a, maxDuration: 12, deadlineAuto: false }, project).maxDuration, 12);
 });
 
 console.log(tests + " nhóm kiểm thử bộ xếp lịch đạt.");

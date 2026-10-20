@@ -198,6 +198,120 @@ test('Kéo nút: chỉ định tuyến lại mũi tên liên quan, nhanh với 1
   console.log(`  (150 công việc: dựng ${full.toFixed(0)} ms, kéo ${drag.toFixed(1)} ms/lần)`);
 });
 
+/** ES/EF/LS/LF text rectangles of a circle-style task node (as drawn by nodeMarkup). */
+const cornerBoxes = (g, p) => g.nodes.filter((n) => !n.virtual).flatMap((n) => [['ES', n.es, -50, -19], ['EF', n.ef, 50, -19], ['LS', n.ls, -50, 29], ['LF', n.lf, 50, 29]].map(([k, v, x, y]) => {
+  const w = (k + ' ' + v).length * 5.6;
+  return { what: n.key + ' ' + k, x1: p[n.key].x + x - w / 2, x2: p[n.key].x + x + w / 2, y1: p[n.key].y + y - 9, y2: p[n.key].y + y + 2 };
+}));
+const hit = (a, b) => a.x2 > b.x1 && a.x1 < b.x2 && a.y2 > b.y1 && a.y1 < b.y2;
+const labelBox = (r) => {
+  const w = r.label.text.length * 6.3 + 6;
+  return { x1: r.label.x - w / 2, x2: r.label.x + w / 2, y1: r.label.y - 11, y2: r.label.y + 3 };
+};
+
+test('Nút mạng: tên đầy đủ xuống dòng, "3 ngày · 8 người", T = 0, không lặp tên = mã', () => {
+  const s = CT.schedule(Samples.construction().tasks), g = G.build(s), svg = G.svg(g, G.positions(g));
+  assert.ok(svg.includes('<tspan x="0">Đường tạm và điện nước</tspan><tspan x="0" dy="12">ngoài</tspan>'), 'name wrapped at a word boundary, never cut');
+  assert.ok(svg.includes('<title>E · Cốt thép và ván khuôn móng</title>') && !svg.includes('…'));
+  assert.ok(svg.includes('>3 ngày · 14 người<') && !/>D \d/.test(svg) && !svg.includes(' · NC '), 'duration in days, labour in people');
+  assert.ok(svg.includes('>T = 0<') && svg.includes('>T = ' + s.duration + '<'));
+  assert.equal((svg.match(/markerUnits="userSpaceOnUse"/g) || []).length, 3, 'fixed-size arrowheads');
+  const card = G.build(s, 'aon', { style: 'card' }), cardSvg = G.svg(card, G.positions(card), 'card');
+  assert.ok(cardSvg.includes('>E · 3 ngày<') && cardSvg.includes('Cốt thép và ván khuôn móng'));
+  // A–G exercise: names equal ids and no labour → the letter is not repeated, no "người".
+  const ex = G.build(CT.schedule(Samples.group().tasks)), exSvg = G.svg(ex, G.positions(ex));
+  assert.ok(exSvg.includes('>3 ngày<') && !exSvg.includes('người') && !exSvg.includes('font-size="10" fill="#557493"'));
+  // Long names: two lines, an ellipsis only beyond them; the full name stays in <title>.
+  const long = 'Lắp dựng cốp pha, cốt thép và đổ bê tông sàn tầng điển hình khối nhà chính phía đông';
+  const lg = G.build(CT.schedule([{ ...task('A', 2), name: long }])), lsvg = G.svg(lg, G.positions(lg));
+  assert.equal((lsvg.match(/<tspan/g) || []).length, 2);
+  assert.ok(lsvg.includes('…</tspan>') && lsvg.includes(`<title>A · ${long}</title>`));
+});
+
+test('Nhãn lag không đè chữ ES/EF/LS/LF; mũi tên vào cùng một cạnh tách rời nhau', () => {
+  const check = (g, p, style = 'circle') => {
+    const routes = G.routes(g, p, style), boxes = cornerBoxes(g, p);
+    for (const r of routes.filter((x) => x.label.text)) for (const b of boxes) assert.ok(!hit(labelBox(r), b), `${r.label.text} (${r.key}) covers ${b.what}`);
+    const tips = new Map();
+    for (const r of routes) {
+      const t = r.points.at(-1), side = r.to + (r.points.at(-2).x < t.x ? '<' : '>');
+      tips.set(side, [...(tips.get(side) || []), t.y]);
+    }
+    for (const [side, ys] of tips) {
+      ys.sort((a, b) => a - b);
+      for (let i = 1; i < ys.length; i++) assert.ok(ys[i] - ys[i - 1] >= 10, `arrowheads into ${side} touch`);
+    }
+  };
+  const s = CT.schedule(Samples.construction().tasks), g = G.build(s), p = G.positions(g);
+  check(g, p);
+  const de = G.routes(g, p).find((r) => r.from === 'D' && r.to === 'E');
+  assert.equal(de.label.text, 'FS+1');
+  check(g, G.fitWidth(g, p, { maxWidth: 1450, style: 'circle' }));
+  for (const sample of [Samples.group(), Samples.exerciseAK()]) {
+    const x = G.build(CT.schedule(sample.tasks));
+    check(x, G.positions(x));
+  }
+  // AOA: an activity label never touches its own arrowhead.
+  const a = G.build(CT.schedule(Samples.exerciseAK().tasks), 'aoa');
+  for (const r of G.routes(a, G.positions(a))) {
+    if (!r.label.text) continue;
+    const t = r.points.at(-1), head = { x1: t.x - 12, x2: t.x + 12, y1: t.y - 6, y2: t.y + 6 };
+    assert.ok(!hit(labelBox(r), head), r.label.text + ' touches its arrowhead');
+  }
+});
+
+test('Mũi tên chờ từ BĐ: nét đứt, ghi rõ lý do, không phải quan hệ găng', () => {
+  const base = CT.schedule([task('A', 3), task('B', 2), task('C', 2, 'A')]);
+  const held = { ...base, placement: true, resourceAware: true, rows: base.rows.map((t) => (t.id === 'B' ? { ...t, es: 5, ef: 7, ls: 5, lf: 7, tf: 0, critical: true } : t)) };
+  const g = G.build(held), edge = g.edges.find((e) => e.from === '@start' && e.to === 'B');
+  assert.deepEqual([edge.label, edge.release, edge.critical], ['Chờ nhân lực · bắt đầu ngày 5', true, false]);
+  const svg = G.svg(g, G.positions(g));
+  assert.ok(svg.includes('graph-release') && svg.includes('stroke-dasharray="5 4"') && !svg.includes('Mốc'));
+  assert.equal(G.build({ ...held, resourceAware: false }).edges.find((e) => e.to === 'B' && e.from === '@start').label, 'Ràng buộc bắt đầu ngày 5');
+  // C held later than A allows (slack 2) → wait link; started right after A (slack 0) → none.
+  const later = { ...base, placement: true, resourceAware: true, rows: base.rows.map((t) => (t.id === 'C' ? { ...t, es: 5, ef: 7, ls: 5, lf: 7, critical: true } : { ...t, critical: false })), edges: base.edges.map((e) => ({ ...e, slack: 2, critical: false })) };
+  assert.equal(G.build(later).edges.find((e) => e.key === 'release:C').label, 'Chờ nhân lực · bắt đầu ngày 5');
+  const tight = { ...later, edges: base.edges.map((e) => ({ ...e, slack: 0, critical: false })) };
+  assert.ok(!G.build(tight).edges.some((e) => e.key === 'release:C'), 'a start that follows its predecessor is not a wait');
+});
+
+test('Xuất báo cáo: fitWidth chia mạng rộng thành các dải ≤ maxWidth, định tuyến vẫn hợp lệ', () => {
+  const project = Samples.construction(), s = CT.schedule(project.tasks);
+  for (const style of ['circle', 'card']) {
+    const g = G.build(s, 'aon', { style }), p = G.positions(g);
+    assert.ok(G.bounds(g, p, style).width > 2000, 'the sample network is wide');
+    const q = G.fitWidth(g, p, { maxWidth: 1450, style });
+    assert.deepEqual(Object.keys(q).sort(), Object.keys(p).sort());
+    const { bounds, routes } = checkRoutes(g, q, style);
+    assert.ok(bounds.width <= 1500, style + ' width ' + bounds.width);
+    assert.equal(routes.length, g.edges.length);
+    for (const r of routes) assert.ok(r.points.length >= 2 && r.points.every((pt) => Number.isFinite(pt.x) && Number.isFinite(pt.y)), r.key + ' has a route');
+    // Reading order: the start is in the first band, the finish in the last, bands stack downward.
+    const ys = Object.values(q).map((v) => v.y);
+    assert.equal(q['@start'].x, Math.min(...Object.values(q).map((v) => v.x)));
+    assert.ok(q['@start'].y <= Math.min(...ys) + 200 && q['@finish'].y >= Math.max(...ys) - 200);
+    assert.deepEqual(G.fitWidth(g, q, { maxWidth: 1450, style }), q, 'already fits');
+    assert.ok(!G.svg(g, q, style).includes('NaN'));
+  }
+  const again = () => {
+    const g = G.build(s);
+    return JSON.stringify(G.fitWidth(g, G.positions(g), { maxWidth: 1450, style: 'circle' }));
+  };
+  assert.equal(again(), again(), 'deterministic');
+  // Applied plan (Planner.active) and AOA, and a small network that already fits (unchanged).
+  const ga = G.build(require('../planner.js').active(project)), pa = G.positions(ga);
+  checkRoutes(ga, G.fitWidth(ga, pa, { maxWidth: 1450, style: 'circle' }));
+  const aoa = G.build(CT.schedule(randomTasks(21, 50, false)), 'aoa'), pAoa = G.positions(aoa), fAoa = G.fitWidth(aoa, pAoa, { maxWidth: 1450 });
+  assert.ok(checkRoutes(aoa, fAoa).bounds.width <= 1500);
+  const small = G.build(CT.schedule(Samples.textbook().tasks)), sp = G.positions(small);
+  assert.equal(G.fitWidth(small, sp, { maxWidth: 1450 }), sp);
+  // Dense random networks: every link still routed without collinear overlaps or node hits.
+  for (const seed of [1, 2, 4, 6]) {
+    const big = G.build(CT.schedule(randomTasks(seed * 100 + 60, 60, seed % 2 === 0))), bp = G.positions(big);
+    assert.ok(checkRoutes(big, G.fitWidth(big, bp, { maxWidth: 1450, style: 'circle' })).bounds.width <= 1530);
+  }
+});
+
 test('Kiểm tra vị trí lưu và sơ đồ tiến độ xiên', () => {
   assert.throws(() => G.validateLayouts({ aon: { M: { x: NaN, y: 125 } } }));
   const g = G.build(CT.schedule(Samples.construction().tasks));
@@ -216,4 +330,4 @@ test('Kiểm tra vị trí lưu và sơ đồ tiến độ xiên', () => {
   assert.ok(/class="cyclogram-line" d="M\S+ (\S+)L\S+ (\S+)"/.test(svg), 'slanted line across a band');
 });
 
-console.log(count + ' nhóm kiểm thử bảng sơ đồ: bố trí phân lớp, định tuyến không chồng/không xuyên nút, AOA, kéo thả nhanh, tiến độ xiên.');
+console.log(count + ' nhóm kiểm thử bảng sơ đồ: bố trí phân lớp, định tuyến không chồng/không xuyên nút, nhãn nút và nhãn lag, AOA, kéo thả nhanh, xuất dải (fitWidth), tiến độ xiên.');

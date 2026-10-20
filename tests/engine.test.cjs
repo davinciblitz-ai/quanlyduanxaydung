@@ -265,6 +265,51 @@ test("Hoàn vốn có chiết khấu và chỉ số sinh lời PI", () => {
   close(a.discountedPayback, 1 + (1000 - pv1) / pv2);
   close(a.pi, (pv1 + pv2) / 1000);
 });
+test("Hoàn vốn: phân biệt dòng tiền không hợp lệ/rỗng với dòng tiền không bao giờ hoàn vốn", () => {
+  const empty = CT.appraisal([0, 0], 0);
+  assert.equal(empty.valid, false);
+  assert.equal(empty.empty, true);
+  assert.equal(empty.payback, null);
+  assert.equal(empty.discountedPayback, null);
+  const allOut = CT.appraisal([-100, -10], 10);
+  assert.equal(allOut.valid, false);
+  assert.equal(allOut.empty, false);
+  assert.equal(allOut.payback, null);
+  const never = CT.appraisal([-1000, 100, 100], 10);
+  assert.equal(never.valid, true);
+  assert.equal(never.empty, false);
+  assert.equal(never.payback, null);
+  assert.equal(never.discountedPayback, null);
+  const ok = CT.appraisal([-100, 110], 10);
+  assert.equal(ok.valid, true);
+  close(ok.discountedPayback, 1);
+  close(CT.appraisal([-100, 230, -132], 10).payback, 100 / 230);
+  close(CT.appraisal([0, -100, 200], 0).payback, 1.5);
+  assert.equal(CT.appraisal([100, -50, 20], 0).payback, 0);
+});
+test("Mẫu công trình: cờ sample, AC riêng khác EV, công việc chưa bắt đầu AC = 0", () => {
+  const p = Samples.construction();
+  assert.equal(p.sample, true);
+  const started = p.tasks.filter((t) => t.progress > 0);
+  assert.ok(started.length > 0);
+  started.forEach((t) => {
+    assert.ok(t.actualCost > 0, t.id);
+    assert.notEqual(t.actualCost, (t.cost * t.progress) / 100, t.id);
+  });
+  assert.ok(started.some((t) => t.actualCost > (t.cost * t.progress) / 100));
+  assert.ok(started.some((t) => t.actualCost < (t.cost * t.progress) / 100));
+  p.tasks.filter((t) => !t.progress).forEach((t) => assert.equal(t.actualCost, 0, t.id));
+  const e = CT.evm(CT.schedule(p.tasks).rows, p.statusDay);
+  assert.equal(e.ev, 96200000);
+  assert.equal(e.ac, 101780000);
+  close(e.cpi, 96200000 / 101780000);
+  assert.ok(e.cpi > 0.9 && e.cpi < 1.05);
+  for (const make of [Samples.textbook, Samples.group, Samples.exerciseAK, Samples.empty]) {
+    const q = make();
+    assert.equal(q.sample, undefined);
+    q.tasks.forEach((t) => assert.equal(t.actualCost, 0));
+  }
+});
 test("Lịch có ngày nghỉ lễ: bỏ qua ngày lễ và kiểm tra định dạng", () => {
   assert.equal(CT.dateAt("2026-04-29", 1, [1, 2, 3, 4, 5, 6], ["2026-04-30", "2026-05-01"]), "2026-05-02");
   assert.equal(CT.dateAt("2026-04-30", 0, [1, 2, 3, 4, 5, 6], ["2026-04-30", "2026-05-01"]), "2026-05-02");

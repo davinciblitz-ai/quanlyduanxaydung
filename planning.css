@@ -124,3 +124,98 @@ td .code, .code { font-size: 11px; }
 .member-actions { display: flex; align-items: center; gap: 8px; }
 .member-actions select { padding: 6px 8px; border: 1px solid #c9d8ea; border-radius: 8px; font-size: 13px; }
 button.avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+/* ===== Báo cáo tĩnh (sao chép / PNG / PDF / in) ===== */
+/* html2canvas vẽ sai bóng đổ khi khung dựng ở toạ độ âm: bỏ bóng trong báo cáo. */
+.report-sheet,.report-sheet *{box-shadow:none!important}
+/* Không bảng nào bị cắt hay cuộn trong báo cáo (kể cả bảng đặt max-height trực tiếp). */
+.report-sheet .table-scroll,.report-sheet .network-wrap{overflow:visible!important;max-height:none!important}
+.report-sheet .panel{overflow:visible}
+.report-sheet th{white-space:normal}
+/* Chữ số cùng độ rộng trên màn hình và trên ảnh xuất (tránh khoảng trống giữa số và đơn vị). */
+.report-sheet .num,.report-sheet .num *{font-variant-numeric:normal}
+.report-sheet .network-wrap svg{margin-left:auto;margin-right:auto}
+.report-sheet .report-title{flex-wrap:wrap;row-gap:4px}
+.report-sheet .report-title .report-note{display:block;flex:1 0 100%;font-size:11px;font-weight:600;color:#9a4a22}
+.report-sheet .report-multiline{white-space:pre-line}
+.report-sheet .report-choice{display:block;background:#edf5ff;border:2px solid #1266be;border-radius:10px;padding:10px 14px}
+/* [export:schedule] */
+/* Lưới ngày của Gantt là phần tử thật (ảnh xuất giữ được), thay cho nền kẻ sọc. */
+.gantt-track{background:none}
+.gantt-grid{position:absolute;top:0;bottom:0;width:0;border-left:1px solid #e3ebf6;pointer-events:none}
+.gantt-header .gantt-tick-end{transform:translateX(-100%)}
+.gantt-header .gantt-tick:first-child.gantt-tick-end{transform:none}
+/* Phần đã hoàn thành: sọc đậm nhìn rõ trên cả thanh găng và thanh thường. */
+.gantt-bar .bar-progress{background:rgba(0,0,0,.32)}
+.legend i.done{background:#8a543d}
+.legend i.status{width:0;height:12px;border-radius:0;background:none;border-left:2px dashed #6488a5}
+.legend i.base{width:14px;height:3px;border-radius:1px;background:#6e7b60;opacity:.6}
+/* Thanh quá ngắn: thời lượng ghi ngay sau thanh, chữ tối. */
+.gantt-bar.narrow{overflow:visible}
+.gantt-bar.narrow>span:last-child{inset:2px auto 2px calc(100% + 4px);color:var(--ink)}
+.gantt-row.is-critical .gantt-bar.narrow>span:last-child{color:var(--crit)}
+.report-sheet .gantt-bar.narrow>span:last-child{color:#17365e}
+.gantt-bar.narrow.left>span:last-child{inset:2px calc(100% + 4px) 2px auto;text-align:right}
+/* Báo cáo: tên công việc xuống dòng thay vì bị cắt. */
+.report-sheet .gantt-row .gantt-label,.report-sheet .gantt-row .gantt-label>span{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.report-sheet .gantt-row .gantt-label{align-items:flex-start}
+.report-sheet .gantt-row .gantt-label>span{min-width:0;flex:1 1 auto}
+.report-sheet .legend{font-size:11px;row-gap:6px}
+.report-sheet .data-note p{font-size:11px}
+
+/* [export:network] */
+/* Báo cáo: giữ dòng tham khảo phương pháp (CI5407/CI5405), chỉ ẩn nhãn và ô chọn cách thể hiện. */
+.report-sheet .network-choices{display:block;padding:0;margin:-8px 0 16px;background:none;border:0}
+.report-sheet .network-choices>:not(.network-ref){display:none}
+.report-sheet .network-choices .network-ref{display:block;font-size:11px;color:#456c97}
+/* Chú giải sơ đồ ngay dưới khung sơ đồ. */
+.network-legend{margin:12px 0 0;line-height:1.7}
+
+/* [export:money] */
+/* Lịch trả nợ: giới hạn chiều cao chỉ trên màn hình (báo cáo bỏ max-height của .table-scroll). */
+.loan-schedule{max-height:380px}
+/* Thẻ KPI tiền ghi số đầy đủ (cộng khớp tổng): cỡ chữ nhỏ hơn để vừa ô. */
+.kpi.money .kpi-value{font-size:22px;letter-spacing:-.3px;white-space:normal}
+.report-sheet .kpi.money .kpi-value{font-size:21px}
+@media(max-width:760px){.kpi.money .kpi-value{font-size:17px}}
+.finance-chart.cost-chart{aspect-ratio:830/262}
+.finance-chart.cash-chart{aspect-ratio:800/250}
+.chart-series.indirect{stroke:#c27a2c;stroke-dasharray:2 4;stroke-width:2.2}
+.chart-label.indirect{fill:#9a5d1c}
+.cost-scenarios td.num strong{white-space:nowrap}
+.crash-inputs{margin-top:14px}
+.report-values{margin:0 0 10px;line-height:1.6}
+.chart-values{margin-top:6px}
+
+/* [export:planner-resources] */
+/* Cài đặt xếp lịch ở dạng chữ (báo cáo tĩnh): chỉ lựa chọn đã chọn. */
+.plan-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 28px;margin:0}
+.plan-summary>div{display:flex;justify-content:space-between;align-items:baseline;gap:16px;padding:7px 0;border-bottom:1px solid #e1eaf5;min-width:0}
+.plan-summary dt{flex:none;color:#526c88;font-size:12px}
+.plan-summary dd{margin:0;min-width:0;text-align:right;font-size:13px;font-weight:600;color:#163e73;overflow-wrap:anywhere}
+.plan-settings-summary h3{margin:0 0 8px;font-size:14px;color:#173f73}
+/* Các phương án tìm được: danh sách tĩnh, đánh dấu phương án đang xem. */
+.plan-alternatives-list{margin:22px 0}
+.plan-alternatives-list>strong{display:block;margin-bottom:6px;font-size:12px;color:#46678b}
+.plan-alternatives-list ol{margin:0;padding-left:22px;font-size:12px;line-height:1.8;color:#315b87}
+.plan-alternatives-list li.current{font-weight:600;color:#032b91}
+/* Bảng lịch phương án khi báo cáo: ngày thực hiện nằm dưới mốc để bảng vừa trang. */
+.plan-dates{display:block;font-size:11px;color:#5c7491;white-space:normal}
+.report-sheet .plan-schedule th,.report-sheet .plan-schedule td{padding-left:8px;padding-right:8px}
+/* Chú giải biểu đồ nhân lực: cột, đường gạch (năng lực), đường chấm (Rtb). */
+.resource-legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin:8px 0 4px;font-size:11px;color:#46678b}
+.resource-legend span{display:inline-flex;align-items:center;gap:6px}
+.resource-legend svg{flex:none;overflow:visible}
+@media(max-width:760px){.plan-summary{grid-template-columns:1fr}}
+
+/* [export:model-risk-team-overview] */
+/* Rủi ro: huy hiệu điểm thấp cùng màu xanh với ô "thấp" của ma trận; chú giải màu; cột phương án ứng phó xuống dòng. */
+.badge.low{background:#e7eed9;color:#506b35}
+.risk-table .risk-response{white-space:normal;min-width:200px;max-width:360px;line-height:1.45}
+.risk-legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:16px;font-size:12px;color:#526f91}
+.risk-legend span{display:inline-flex;align-items:center;gap:6px}
+.risk-legend i.risk-cell{display:inline-block;width:14px;height:14px;border-radius:3px;flex:none}
+/* Thi công 3D: dòng trạng thái giai đoạn theo ngày, ghi chú thực tế chậm hơn kế hoạch. */
+.phase-caption{margin:22px 0 10px;font-size:12px;font-weight:600;color:#526f91}
+.phase-caption:empty{display:none}
+.scene-panel .panel-head p.scene-actual,.scene-actual{margin-top:4px;font-size:12px;font-weight:600;color:#9a4a22}
+

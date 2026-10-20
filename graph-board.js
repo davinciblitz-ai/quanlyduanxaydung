@@ -24,8 +24,9 @@
   const fixed = (v) => Math.round(v * 10) / 10;
 
   // Distance between layers (col) and rows (row) per node style, and the top-left node centre.
+  // Circle rows leave room for a two-line task name under the node plus a few routing lanes.
   const LAYOUT = {
-    circle: { col: 190, row: 165, left: 110, top: 125 },
+    circle: { col: 190, row: 175, left: 110, top: 125 },
     card: { col: 265, row: 150, left: 130, top: 125 },
     aoa: { col: 165, row: 115, left: 90, top: 100 },
   };
@@ -35,6 +36,70 @@
   const TOP_LABELLED = 40; // highest lane for an edge with a label (label sits ~16 px above it)
   const TOP_PLAIN = 24;
   const EDGE_MARGIN = 16;
+  // Arrowheads have a fixed size (markerUnits="userSpaceOnUse"), so the ports of one node side are
+  // spaced at least PORT_GAP apart and two arrowheads entering the same side never touch.
+  const HEAD = { normal: { len: 9, half: 4 }, critical: { len: 10, half: 4.5 } };
+  const PORT_GAP = 11;
+  const NEAR_PORT = 3 * TRACK_X + CLEAR; // a crossing this close to where a link leaves/enters a node is confusing
+  const PORT_CROSS = 600;
+
+  // ---------------------------------------------------------------------------------------------
+  // Node text (shared by the footprint/label-avoidance geometry and the markup).
+
+  /** Task name shown under the node; '' when it only repeats the id (exercise tasks named "A"). */
+  const shownName = (n) => {
+    const name = String(n.name ?? '').trim();
+    return name && name !== String(n.id ?? n.label ?? '').trim() ? name : '';
+  };
+
+  /** Word-wrapped lines of at most `max` characters; an ellipsis only when more than `count` lines are needed. */
+  function wrapName(text, max, count = 2) {
+    const words = String(text).split(/\s+/).filter(Boolean), lines = [];
+    let line = '';
+    for (let word of words) {
+      while (word.length > max) {
+        // A single word longer than a line (rare): break it hard.
+        if (line) lines.push(line);
+        lines.push(word.slice(0, max - 1) + '-');
+        word = word.slice(max - 1);
+        line = '';
+      }
+      if (!line) line = word;
+      else if (line.length + 1 + word.length <= max) line += ' ' + word;
+      else {
+        lines.push(line);
+        line = word;
+      }
+    }
+    if (line) lines.push(line);
+    if (lines.length <= count) return lines;
+    const kept = lines.slice(0, count), last = kept[count - 1];
+    kept[count - 1] = (last.length >= max ? last.slice(0, max - 1).trimEnd() : last) + '…';
+    return kept;
+  }
+
+  const NAME_CHARS = 24; // circle style: characters per name line (font-size 10, ≈ 134 px)
+  const textWidth = (text, size) => String(text).length * size * 0.56;
+
+  /** Circle-style task node: the four corner values, the float line, the duration line and the name. */
+  function circleText(n) {
+    return {
+      corners: [['ES', n.es, -50, -19], ['EF', n.ef, 50, -19], ['LS', n.ls, -50, 29], ['LF', n.lf, 50, 29]].map(([label, value, x, y]) => [label + ' ' + number(value), x, y]),
+      float: `TF ${number(n.tf)} · FF ${number(n.ff)}`,
+      // "3 ngày · 8 người": never the bare letter "D" (it reads like activity D) nor "NC".
+      duration: `${number(n.duration)} ngày${n.crew === false ? '' : ' · ' + number(n.workers || 0) + ' người'}`,
+      name: wrapName(shownName(n), NAME_CHARS),
+    };
+  }
+
+  /** Card-style header and name lines for a card of half-width h. */
+  function cardText(n, h) {
+    const head = `${n.label} · ${number(n.duration)}`, room = 2 * h - 20;
+    return {
+      head: textWidth(head + ' ngày', 15) <= room ? head + ' ngày' : head + ' ng',
+      name: wrapName(shownName(n), Math.max(10, Math.floor((2 * h - 16) / 5.6))),
+    };
+  }
 
   // ---------------------------------------------------------------------------------------------
   // Model + layout.
@@ -86,8 +151,12 @@
     // The default relation FS+0 is implied by the arrow itself; label only lags and SS/FF/SF.
     const edges = schedule.edges.map((e, i) => ({ ...e, key: 'edge:' + i, label: e.type === 'FS' && e.lag === 0 ? '' : e.type + (e.lag >= 0 ? '+' : '') + e.lag }));
     const hasIn = new Set(schedule.edges.map((e) => e.to)), hasOut = new Set(schedule.edges.map((e) => e.from));
+    // A critical task that starts later than its predecessors allow is held by a start constraint
+    // (resource levelling in an applied plan). It is drawn as a dashed "wait" link from BĐ with
+    // its reason, never as a critical dependency with a lag.
+    const release = (t) => ({ label: (schedule.resourceAware ? 'Chờ nhân lực · bắt đầu ngày ' : 'Ràng buộc bắt đầu ngày ') + number(t.es), release: true, critical: false });
     for (const t of schedule.rows) {
-      if (!hasIn.has(t.id)) edges.push({ key: 'start:' + t.id, from: '@start', to: t.id, label: '', critical: t.critical && t.es === 0 });
+      if (!hasIn.has(t.id)) edges.push({ key: 'start:' + t.id, from: '@start', to: t.id, label: '', critical: t.critical && t.es === 0, ...(t.critical && t.es > 0 ? release(t) : {}) });
       if (!hasOut.has(t.id) || t.ef === T) edges.push({ key: 'finish:' + t.id, from: t.id, to: '@finish', label: '', critical: t.critical && t.ef === T });
     }
     // Primary critical chain (most tasks linked by critical relations) → one straight row.
@@ -108,9 +177,12 @@
       const candidate = chain(id);
       if (candidate.length > primary.length) primary = candidate;
     }
+    // A task whose start follows a drawn relation exactly (slack 0, e.g. after a finished,
+    // non-critical predecessor) is not held by a constraint: no wait link for it.
+    const tight = new Set(schedule.edges.filter((e) => Number.isFinite(e.slack) && e.slack <= 0).map((e) => e.to));
     for (const t of schedule.rows)
-      if (t.critical && !criticalEdges.some((e) => e.to === t.id) && !edges.some((e) => e.from === '@start' && e.to === t.id))
-        edges.push({ key: 'release:' + t.id, from: '@start', to: t.id, label: t.es ? 'Mốc ' + number(t.es) : '', critical: true });
+      if (t.critical && !criticalEdges.some((e) => e.to === t.id) && !edges.some((e) => e.from === '@start' && e.to === t.id) && !(t.es > 0 && tight.has(t.id)))
+        edges.push({ key: 'release:' + t.id, from: '@start', to: t.id, ...(t.es > 0 ? release(t) : { label: '', critical: true }) });
     const lay = Networks.layered(nodes.map((n) => n.key), edges, { spine: ['@start', ...primary, '@finish'] });
     place(nodes, lay, LAYOUT[style]);
     widenTerminals(nodes, edges, '@start', '@finish');
@@ -150,17 +222,43 @@
       if (graph.kind === 'aoa') s = { l: 31, r: 31, t: 31, b: 31, radius: 29, band: 25 };
       else if (style === 'card') s = { l: half + 3, r: half + 3, t: 54, b: 64, side: half, band: 30 };
       else if (n.virtual) s = { l: 34, r: 34, t: 34, b: 58, radius: 30, band: 27 };
-      else s = { l: 68, r: 68, t: 36, b: 86, radius: 30, band: 12 }; // circle + ES/EF/LS/LF labels (ports stay between the label rows)
-      map.set(n.key, { key: n.key, x, y, x1: x - s.l, x2: x + s.r, y1: y - s.t, y2: y + s.b, radius: s.radius || 0, side: s.side || 0, band: s.band });
+      else {
+        // Circle + ES/EF/LS/LF labels (ports stay between the label rows, |dy| ≤ 15), then the
+        // TF line, the duration line and up to two name lines.
+        const lines = circleText(n).name.length;
+        s = { l: 68, r: 68, t: 36, b: lines > 1 ? 98 : lines ? 86 : 72, radius: 30, band: 15 };
+      }
+      map.set(n.key, { key: n.key, node: n, x, y, x1: x - s.l, x2: x + s.r, y1: y - s.t, y2: y + s.b, radius: s.radius || 0, side: s.side || 0, band: s.band });
     }
     return { map, half };
   }
 
+  /** Absolute rectangles covered by a node's own drawing and text (edge labels must stay clear). */
+  function inkOf(g, kind, style, half) {
+    if (g.ink) return g.ink;
+    const n = g.node, box = (text, size, x, y) => {
+      const w = textWidth(text, size);
+      return [x - w / 2 - 2, y - size * 0.8 - 1, x + w / 2 + 2, y + 3];
+    };
+    let list;
+    if (kind === 'aoa') list = [[-30, -30, 30, 30]];
+    else if (style === 'card') list = [[-half - 1, -51, half + 1, 61]];
+    else if (n.virtual) list = [[-31, -31, 31, 31], box('T = ' + number(n.es), 11, 0, 50)];
+    else {
+      const t = circleText(n);
+      list = [[-31, -31, 31, 31], ...t.corners.map(([text, x, y]) => box(text, 10, x, y)), box(t.float, 11, 0, 50), box(t.duration, 11.5, 0, 66), ...t.name.map((line, i) => box(line, 10, 0, 81 + 12 * i))];
+    }
+    return (g.ink = list.map(([x1, y1, x2, y2]) => ({ x1: g.x + x1, y1: g.y + y1, x2: g.x + x2, y2: g.y + y2 })));
+  }
+
   /**
-   * Port points. Each node side spreads its links vertically (sorted by the other end's y) so
-   * parallel links never share a segment; the link to a level neighbour keeps offset 0.
+   * Port points. Each node side spreads its links vertically (sorted by the y each route heads to
+   * after its stub — the other end's y until routes exist — so links of one side do not cross at
+   * the stub); the link to a level neighbour keeps offset 0. Ports are PORT_GAP apart when the
+   * side's band allows it.
+   * @param heading optional (edgeKey, end) → y of the route's first/last turn, or undefined
    */
-  function assignPorts(graph, geo, p) {
+  function assignPorts(graph, geo, p, heading = null) {
     const sides = new Map(), ports = new Map();
     const push = (key, side, item) => {
       if (!sides.has(key)) sides.set(key, { L: [], R: [] });
@@ -179,7 +277,13 @@
       for (const side of ['L', 'R']) {
         const list = both[side];
         if (!list.length) continue;
-        list.sort((a, b) => p[a.other].y - p[b.other].y || p[a.other].x - p[b.other].x || (a.e.key < b.e.key ? -1 : 1));
+        for (const item of list) {
+          const h = heading ? heading(item.e.key, item.end) : undefined;
+          item.toward = Number.isFinite(h) ? h : p[item.other].y;
+        }
+        // Same heading: outgoing and incoming links stay grouped so one link's stub never sits
+        // between another link's stub and its rail.
+        list.sort((a, b) => a.toward - b.toward || p[a.other].y - p[b.other].y || (a.end === b.end ? 0 : a.end === 's' ? -1 : 1) || p[a.other].x - p[b.other].x || (a.e.key < b.e.key ? -1 : 1));
         let centre = -1, nearest = Infinity;
         list.forEach((item, i) => {
           const o = p[item.other];
@@ -189,7 +293,7 @@
           }
         });
         if (centre < 0) centre = (list.length - 1) / 2;
-        const reach = Math.max(centre, list.length - 1 - centre), step = reach ? Math.min(8, node.band / reach) : 0, dir = side === 'R' ? 1 : -1;
+        const reach = Math.max(centre, list.length - 1 - centre), step = reach ? Math.min(PORT_GAP, node.band / reach) : 0, dir = side === 'R' ? 1 : -1;
         list.forEach((item, i) => {
           const dy = (i - centre) * step, dx = node.radius ? Math.sqrt(Math.max(0, node.radius ** 2 - dy ** 2)) : node.side;
           const point = { x: node.x + dir * dx, y: node.y + dy }, port = ports.get(item.e.key);
@@ -274,8 +378,13 @@
    */
   function cost(points, ctx, st) {
     let base = (points.length - 2) * 6, penalty = 0;
+    const n = points.length, A = st.geo.get(ctx.from), B = st.geo.get(ctx.to);
+    // Footprint edge where the route leaves its source / reaches its target (see anchorsOf).
+    const fromAnchor = A && n > 1 ? (points[1].x >= points[0].x ? A.x2 : A.x1) : undefined;
+    const toAnchor = B && n > 1 ? (points[n - 1].x >= points[n - 2].x ? B.x1 : B.x2) : undefined;
     for (let i = 1; i < points.length; i++) {
       const s = segment(points[i - 1], points[i]), first = i === 1, last = i === points.length - 1;
+      const anchors = s.h ? [first ? fromAnchor : undefined, last ? toAnchor : undefined].filter((a) => a !== undefined) : [];
       base += (s.x2 - s.x1 + s.y2 - s.y1) * 0.02;
       st.boxes.query(s.x1, s.y1, s.x2, s.y2, (box) => {
         // The first/last stub may run inside its own node's label area up to the port.
@@ -291,7 +400,11 @@
           else if (gap < 3 && overlap > -10) penalty += 300; // end-to-end on one track reads as one line
         } else {
           const hs = s.h ? s : o, vs = s.h ? o : s;
-          if (vs.x1 > hs.x1 + 1 && vs.x1 < hs.x2 - 1 && hs.y1 > vs.y1 + 1 && hs.y1 < vs.y2 - 1) penalty += 40;
+          if (vs.x1 > hs.x1 + 1 && vs.x1 < hs.x2 - 1 && hs.y1 > vs.y1 + 1 && hs.y1 < vs.y2 - 1) {
+            // A crossing right next to a port makes it unclear which arrowhead belongs to which link.
+            const near = (list) => list && list.some((a) => Math.abs(vs.x1 - a) < NEAR_PORT);
+            penalty += near(s.h ? anchors : o.anchors) ? PORT_CROSS : 40;
+          }
         }
       });
     }
@@ -439,6 +552,26 @@
         if (bestPenalty === 0) break;
       }
     }
+
+    // (D) Wrapped report layout only (fitWidth), for a link spanning several bands: around the
+    // right of every node — exit → X1 → lane next to the source → gutter G → lane next to the
+    // target → X2 → entry.
+    if (st.wrapped && bestPenalty >= 500) {
+      const gutter = st.maxX + CLEAR, X1 = dS > 0 ? A.x2 + CLEAR + TRACK_X : A.x1 - CLEAR - TRACK_X, X2 = dT > 0 ? B.x1 - CLEAR - TRACK_X : B.x2 + CLEAR + TRACK_X;
+      const lanes = (node, X) => {
+        const list = freeIntervals(st, false, Math.min(node.x1, X) - 20, gutter + 60, ctx.top, st.maxY + 2000);
+        const above = list.filter((c) => c[1] <= node.y1 + 0.01).pop(), under = list.find((c) => c[0] >= node.y2 - 0.01);
+        return [above, under].filter(Boolean);
+      };
+      for (const c1 of lanes(A, X1))
+        for (const c2 of lanes(B, X2)) {
+          const x1 = tracks(st, true, s.y, (c1[0] + c1[1]) / 2, X1, dS > 0 ? X1 : X1 - 60, dS > 0 ? X1 + 60 : X1, 0, stubCheck(st, s.y, s.x, Math.min(X1, X1 + dS * 60), Math.max(X1, X1 + dS * 60)))[0];
+          const x2 = tracks(st, true, t.y, (c2[0] + c2[1]) / 2, X2, dT > 0 ? X2 - 60 : X2, dT > 0 ? X2 : X2 + 60, 0, stubCheck(st, t.y, t.x, Math.min(X2, X2 - dT * 60), Math.max(X2, X2 - dT * 60)))[0];
+          const lane = (c, xa) => tracks(st, false, xa, gutter, c[1] > st.maxY + 100 ? c[0] + TRACK_Y : (c[0] + c[1]) / 2, c[0] + 3, Math.min(c[1], st.maxY + 400) - 3)[0];
+          const Y1 = lane(c1, x1), Y2 = lane(c2, x2), G = tracks(st, true, Y1, Y2, gutter + TRACK_X, gutter, gutter + 400, 1)[0];
+          consider([s, { x: x1, y: s.y }, { x: x1, y: Y1 }, { x: G, y: Y1 }, { x: G, y: Y2 }, { x: x2, y: Y2 }, { x: x2, y: t.y }, t]);
+        }
+    }
     return best || [s, t];
   }
 
@@ -451,6 +584,8 @@
     const out = segment(q.s, { x: q.dirS > 0 ? A.x2 + CLEAR : A.x1 - CLEAR, y: q.s.y }, e.key);
     const into = segment({ x: q.dirT > 0 ? B.x1 - CLEAR : B.x2 + CLEAR, y: q.t.y }, q.t, e.key);
     out.first = into.last = true;
+    out.anchors = [q.dirS > 0 ? A.x2 : A.x1];
+    into.anchors = [q.dirT > 0 ? B.x1 : B.x2];
     for (const s of [out, into]) st.segs.insert(s, s.x1, s.y1, s.x2, s.y2);
     st.reserved.set(e.key, [out, into]);
   }
@@ -462,11 +597,12 @@
 
   function commit(st, e, points) {
     unreserve(st, e.key);
-    const segs = [];
+    const segs = [], n = points.length, A = st.geo.get(e.from), B = st.geo.get(e.to);
     for (let i = 1; i < points.length; i++) {
       const s = segment(points[i - 1], points[i], e.key);
       s.first = i === 1;
       s.last = i === points.length - 1;
+      if (s.h) s.anchors = [...(s.first ? [points[1].x >= points[0].x ? A.x2 : A.x1] : []), ...(s.last ? [points[n - 1].x >= points[n - 2].x ? B.x1 : B.x2] : [])];
       st.segs.insert(s, s.x1, s.y1, s.x2, s.y2);
       segs.push(s);
     }
@@ -501,6 +637,7 @@
   function setExtent(st) {
     st.minY = Math.min(...[...st.geo.values()].map((g) => g.y1));
     st.maxY = Math.max(...[...st.geo.values()].map((g) => g.y2));
+    st.maxX = Math.max(...[...st.geo.values()].map((g) => g.x2));
   }
 
   const contextOf = (e) => ({ key: e.key, from: e.from, to: e.to, top: e.label ? TOP_LABELLED : TOP_PLAIN });
@@ -567,16 +704,49 @@
     }
   }
 
-  function fullPlan(graph, p, style) {
+  const samePort = (a, b) => a.s.x === b.s.x && a.s.y === b.s.y && a.t.x === b.t.x && a.t.y === b.t.y;
+
+  /** y of each route's first turn after its source stub ('|s') and last turn before its target stub ('|t'). */
+  function headingsOf(st, edges) {
+    const map = new Map();
+    for (const e of edges) {
+      const pts = st.routes.get(e.key).points;
+      if (pts.length < 3) continue; // straight link: sorted by the other end
+      map.set(e.key + '|s', pts[2].y);
+      map.set(e.key + '|t', pts[pts.length - 3].y);
+    }
+    return map;
+  }
+
+  function routeAll(graph, p, style, headings) {
     const { map: geo, half } = shapes(graph, p, style);
-    const st = { style, half, geo, ports: assignPorts(graph, geo, p), boxes: new Grid(128), segs: new Grid(64), routes: new Map(), reserved: new Map(), pos: snapshot(graph, p) };
+    const heading = headings ? (key, end) => headings.get(key + '|' + end) : null;
+    const st = { style, half, kind: graph.kind, wrapped: wrappedLayouts.has(p), geo, headings, ports: assignPorts(graph, geo, p, heading), boxes: new Grid(128), segs: new Grid(64), routes: new Map(), reserved: new Map(), pos: snapshot(graph, p) };
     for (const g of geo.values()) st.boxes.insert(g, g.x1, g.y1, g.x2, g.y2);
     setExtent(st);
     for (const e of graph.edges) reserve(st, e);
     const order = [...graph.edges].sort(priority(st));
     for (const e of order) commit(st, e, routeEdge(e, st));
     improve(st, order);
-    placeLabels(st, order);
+    st.order = order;
+    return st;
+  }
+
+  const totalCost = (st, edges) => edges.reduce((sum, e) => sum + cost(st.routes.get(e.key).points, contextOf(e), st).total, 0);
+
+  /**
+   * Routes everything with ports sorted by the other end; then, when the routes head elsewhere
+   * (detours above/below), sorts each side's ports by the routes' real headings and routes again,
+   * keeping the cheaper result. Deterministic.
+   */
+  function fullPlan(graph, p, style) {
+    let st = routeAll(graph, p, style, null);
+    const headings = headingsOf(st, graph.edges), trial = assignPorts(graph, st.geo, p, (key, end) => headings.get(key + '|' + end));
+    if (graph.edges.some((e) => !samePort(st.ports.get(e.key), trial.get(e.key)))) {
+      const again = routeAll(graph, p, style, headings);
+      if (totalCost(again, graph.edges) < totalCost(st, graph.edges)) st = again;
+    }
+    placeLabels(st, st.order);
     return st;
   }
 
@@ -591,9 +761,12 @@
       st.boxes.insert(g, g.x1, g.y1, g.x2, g.y2);
     }
     setExtent(st);
-    const ports = assignPorts(graph, st.geo, p), dirty = new Set();
-    const same = (a, b) => a.s.x === b.s.x && a.s.y === b.s.y && a.t.x === b.t.x && a.t.y === b.t.y;
-    for (const e of graph.edges) if (!same(st.ports.get(e.key), ports.get(e.key))) dirty.add(e.key);
+    // Keep the heading order the current ports were assigned with; links of moved nodes fall back
+    // to the other end's y.
+    const movedSet = new Set(moved), touching = new Set(graph.edges.filter((e) => movedSet.has(e.from) || movedSet.has(e.to)).map((e) => e.key));
+    const heading = st.headings ? (key, end) => (touching.has(key) ? undefined : st.headings.get(key + '|' + end)) : null;
+    const ports = assignPorts(graph, st.geo, p, heading), dirty = new Set();
+    for (const e of graph.edges) if (!samePort(st.ports.get(e.key), ports.get(e.key))) dirty.add(e.key);
     st.ports = ports;
     for (const key of moved) {
       const g = st.geo.get(key);
@@ -611,11 +784,12 @@
   }
 
   const plans = new WeakMap();
+  const wrappedLayouts = new WeakSet(); // positions returned by fitWidth (banded report layout)
   let lastStyle = 'circle';
 
   function plan(graph, p, style) {
     let st = plans.get(graph);
-    if (st && st.style === style && st.routes.size === graph.edges.length) {
+    if (st && st.style === style && st.routes.size === graph.edges.length && st.wrapped === wrappedLayouts.has(p)) {
       const moved = graph.nodes.filter((n) => {
         const a = st.pos.get(n.key), b = p[n.key];
         return !a || a.x !== b.x || a.y !== b.y;
@@ -630,47 +804,87 @@
 
   const labelWidth = (text) => text.length * 6.3 + 6;
 
+  const overlaps = (a, b) => a.x2 > b.x1 && a.x1 < b.x2 && a.y2 > b.y1 && a.y1 < b.y2;
+
+  /** Box around the (fixed-size) arrowhead at the end of a route, with a 2 px margin. */
+  function headBox(points, e) {
+    const tip = points[points.length - 1], prev = points[points.length - 2] || tip, size = e.critical ? HEAD.critical : HEAD.normal, pad = 2;
+    const dx = Math.sign(tip.x - prev.x), dy = Math.sign(tip.y - prev.y);
+    if (dx || !dy) {
+      const x0 = tip.x - (dx || 1) * size.len;
+      return { x1: Math.min(x0, tip.x) - pad, x2: Math.max(x0, tip.x) + pad, y1: tip.y - size.half - pad, y2: tip.y + size.half + pad };
+    }
+    const y0 = tip.y - dy * size.len;
+    return { x1: tip.x - size.half - pad, x2: tip.x + size.half + pad, y1: Math.min(y0, tip.y) - pad, y2: Math.max(y0, tip.y) + pad };
+  }
+
   /**
-   * Edge labels: candidates above/below the horizontal runs (longest first); the first spot that
-   * clears node footprints, earlier labels and other routes wins, else the least bad one.
+   * Edge labels. Candidates: above/below the horizontal runs (longest first; the run into the
+   * target is shortened by the arrowhead), then beside the vertical runs, then further out. The
+   * first spot that clears node footprints, node text, arrowheads, earlier labels and other routes
+   * wins, else the least bad one; covering node text (ES/EF/LS/LF, TF, duration, name) or an
+   * arrowhead is penalised far more than sitting in a node's empty footprint.
    */
   function placeLabels(st, list) {
-    const placed = new Grid(64);
+    const placed = new Grid(64), heads = new Grid(64);
     st.labels = new Map();
     for (const e of list) {
+      const box = headBox(st.routes.get(e.key).points, e);
+      heads.insert(box, box.x1, box.y1, box.x2, box.y2);
+    }
+    for (const e of list) {
       if (!e.label) continue;
-      const points = st.routes.get(e.key).points, w = labelWidth(e.label), runs = [];
+      const points = st.routes.get(e.key).points, w = labelWidth(e.label), runs = [], candidates = [];
+      const head = (e.critical ? HEAD.critical : HEAD.normal).len + 4;
       for (let i = 1; i < points.length; i++) {
         const a = points[i - 1], b = points[i];
-        if (Math.abs(a.y - b.y) < 0.01) runs.push([Math.min(a.x, b.x), Math.max(a.x, b.x), a.y]);
+        if (Math.abs(a.y - b.y) >= 0.01) continue;
+        let x1 = Math.min(a.x, b.x), x2 = Math.max(a.x, b.x);
+        if (i === points.length - 1) {
+          if (b.x > a.x) x2 = Math.max(x1, x2 - head);
+          else x1 = Math.min(x2, x1 + head);
+        }
+        runs.push([x1, x2, a.y]);
       }
       if (!runs.length) runs.push([points[0].x, points[0].x, (points[0].y + points[points.length - 1].y) / 2]);
       runs.sort((x, y) => y[1] - y[0] - (x[1] - x[0]));
-      let best = null, bestScore = Infinity;
       for (const [x1, x2, y] of runs) {
-        const xs = [(x1 + x2) / 2];
+        const xs = [(x1 + x2) / 2], short = x2 - x1 < w ? 30 : 0;
         if (x2 - x1 > w + 16) xs.push(x2 - w / 2 - 8, x1 + w / 2 + 8);
-        for (const x of xs)
-          for (const base of [y - 7, y + 15]) {
-            const box = { x1: x - w / 2, x2: x + w / 2, y1: base - 11, y2: base + 3 };
-            let score = (x2 - x1 < w ? 30 : 0) + (base > y ? 2 : 0);
-            if (box.y1 < EDGE_MARGIN || box.x1 < 4) score += 1000;
-            st.boxes.query(box.x1, box.y1, box.x2, box.y2, (g) => {
-              if (g.x2 > box.x1 && g.x1 < box.x2 && g.y2 > box.y1 && g.y1 < box.y2) score += 100;
-            });
-            placed.query(box.x1, box.y1, box.x2, box.y2, (o) => {
-              if (o.x2 > box.x1 && o.x1 < box.x2 && o.y2 > box.y1 && o.y1 < box.y2) score += 60;
-            });
-            st.segs.query(box.x1, box.y1, box.x2, box.y2, (o) => {
-              if (o.edge !== e.key && o.x2 > box.x1 && o.x1 < box.x2 && o.y2 > box.y1 && o.y1 < box.y2) score += 4;
-            });
-            if (score < bestScore) {
-              bestScore = score;
-              best = { x, y: base, box };
-            }
-            if (!score) break;
-          }
-        if (bestScore === 0) break;
+        for (const x of xs) candidates.push({ x, base: y - 7, extra: short }, { x, base: y + 15, extra: short + 2 });
+      }
+      // Beside vertical runs (e.g. a link that drops into its target with only a short stub).
+      for (let i = 1; i < points.length; i++) {
+        const a = points[i - 1], b = points[i], y1 = Math.min(a.y, b.y), y2 = Math.max(a.y, b.y);
+        if (Math.abs(a.x - b.x) >= 0.01 || y2 - y1 < 30) continue;
+        for (const y of [(y1 + y2) / 2, y1 + (y2 - y1) / 4, y2 - (y2 - y1) / 4])
+          for (const side of [1, -1]) candidates.push({ x: a.x + side * (w / 2 + 6), base: y + 4, extra: 3 });
+      }
+      for (const [x1, x2, y] of runs.slice(0, 2)) for (const base of [y - 19, y + 27]) candidates.push({ x: (x1 + x2) / 2, base, extra: 8 + (x2 - x1 < w ? 30 : 0) });
+      let best = null, bestScore = Infinity;
+      for (const c of candidates) {
+        const box = { x1: c.x - w / 2, x2: c.x + w / 2, y1: c.base - 11, y2: c.base + 3 };
+        let score = c.extra;
+        if (box.y1 < EDGE_MARGIN || box.x1 < 4) score += 1000;
+        st.boxes.query(box.x1, box.y1, box.x2, box.y2, (g) => {
+          if (!overlaps(g, box)) return;
+          score += 100;
+          for (const r of inkOf(g, st.kind, st.style, st.half)) if (overlaps(r, box)) score += 400;
+        });
+        heads.query(box.x1, box.y1, box.x2, box.y2, (h) => {
+          if (overlaps(h, box)) score += 150;
+        });
+        placed.query(box.x1, box.y1, box.x2, box.y2, (o) => {
+          if (overlaps(o, box)) score += 60;
+        });
+        st.segs.query(box.x1, box.y1, box.x2, box.y2, (o) => {
+          if (overlaps(o, box)) score += o.edge !== e.key ? 4 : 6; // own bends too
+        });
+        if (score < bestScore) {
+          bestScore = score;
+          best = { x: c.x, y: c.base, box };
+        }
+        if (!score) break;
       }
       placed.insert(best.box, best.box.x1, best.box.y1, best.box.x2, best.box.y2);
       st.labels.set(e.key, { x: best.x, y: best.y });
@@ -710,6 +924,92 @@
     return { width: Math.max(640, Math.ceil(maxX + 24 + EDGE_MARGIN)), height: Math.max(300, Math.ceil(maxY + 24 + EDGE_MARGIN)) };
   }
 
+  /** Rank columns of a layout: nodes sharing an x (auto layout); a dragged node forms its own. */
+  function columnsOf(graph, p) {
+    const keys = graph.nodes.map((n) => n.key).sort((a, b) => p[a].x - p[b].x || p[a].y - p[b].y || (a < b ? -1 : 1)), cols = [];
+    for (const key of keys) {
+      const last = cols[cols.length - 1];
+      if (last && p[key].x - last.x < 1) last.keys.push(key);
+      else cols.push({ x: p[key].x, keys: [key] });
+    }
+    return cols;
+  }
+
+  /** Greedy bands of consecutive columns whose x-span stays within `limit`. */
+  function bandsOf(cols, limit) {
+    const bands = [];
+    for (const col of cols) {
+      const band = bands[bands.length - 1];
+      if (band && col.x - band[0].x <= limit) band.push(col);
+      else bands.push([col]);
+    }
+    return bands;
+  }
+
+  /**
+   * Report layout for a very wide network (static export): when the laid-out width exceeds
+   * maxWidth by more than 10 %, the left-to-right rank columns are re-flowed into stacked bands
+   * ("continued rows") of at most maxWidth each, in reading order — band 1 left → right, then band 2
+   * below it, … — so the start stays first and the finish last. Rows keep their relative height
+   * inside a band (the critical chain stays on one line per band); the gap between bands leaves
+   * lanes for the links that continue into the next band. Deterministic.
+   * @param options {maxWidth = 1450, style = the style last rendered ('circle' | 'card')}
+   * @returns positions with the same keys (the input object itself when it already fits)
+   */
+  function fitWidth(graph, p, options = {}) {
+    const maxWidth = Number(options.maxWidth) > 0 ? Number(options.maxWidth) : 1450, style = options.style || lastStyle;
+    const before = bounds(graph, p, style);
+    if (before.width <= maxWidth * 1.1) return p;
+    const cols = columnsOf(graph, p);
+    if (cols.length < 3) return p;
+    const st = plan(graph, p, style), geo = [...st.geo.values()];
+    const first = cols[0].x, last = cols[cols.length - 1].x, total = last - first, pad = 4 * TRACK_X;
+    const half = Math.max(...geo.map((g) => g.x2 - g.x));
+    // Room right of a band's last column: its node, the rails of links leaving it and the margin.
+    const right = Math.max(before.width - last, half + 24 + EDGE_MARGIN) + 6 * TRACK_X;
+    // Route/label extent above the top row and below the bottom row of the original layout.
+    let minY = Infinity, maxY = -Infinity;
+    for (const e of graph.edges) {
+      for (const pt of st.routes.get(e.key).points) {
+        minY = Math.min(minY, pt.y);
+        maxY = Math.max(maxY, pt.y);
+      }
+      if (e.label) minY = Math.min(minY, labelPoint(st, e).y - 12);
+    }
+    const above = Math.max(0, Math.min(...geo.map((g) => g.y1)) - minY), below = Math.max(0, maxY - Math.max(...geo.map((g) => g.y2)));
+    const widest = Math.max(...cols.slice(1).map((c, i) => c.x - cols[i].x));
+    let limit = Math.max(widest, maxWidth - first - pad - right), result = p;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      // Balanced bands: the smallest span that still needs no more bands than the limit allows.
+      const count = bandsOf(cols, limit).length;
+      let span = Math.max(widest, total / count);
+      while (bandsOf(cols, span).length > count) span += 5;
+      const bands = bandsOf(cols, span), bandOf = new Map();
+      bands.forEach((band, i) => band.forEach((col) => col.keys.forEach((key) => bandOf.set(key, i))));
+      const q = Object.create(null);
+      let bottom = -Infinity;
+      bands.forEach((band, i) => {
+        const keys = band.flatMap((col) => col.keys), boxes = keys.map((key) => st.geo.get(key));
+        const top = Math.min(...boxes.map((g) => g.y1)), low = Math.max(...boxes.map((g) => g.y2));
+        let dy = 0;
+        if (i) {
+          // Links continuing from earlier bands into this one or later ones each need a lane.
+          const crossing = graph.edges.filter((e) => Math.min(bandOf.get(e.from), bandOf.get(e.to)) < i && Math.max(bandOf.get(e.from), bandOf.get(e.to)) >= i);
+          const labelled = crossing.some((e) => e.label) ? 18 : 0;
+          dy = bottom + Math.max(70, Math.min(above, 70) + Math.min(below, 70) + crossing.length * TRACK_Y + labelled + 2 * CLEAR) - top;
+        }
+        for (const key of keys) q[key] = { x: fixed(first + pad + p[key].x - band[0].x), y: fixed(p[key].y + dy) };
+        bottom = low + dy;
+      });
+      result = q;
+      wrappedLayouts.add(q);
+      const after = bounds(graph, q, style);
+      if (after.width <= maxWidth * 1.05 || count >= cols.length) break;
+      limit = Math.max(widest, limit - (after.width - maxWidth) - TRACK_X);
+    }
+    return result;
+  }
+
   // ---------------------------------------------------------------------------------------------
   // Rendering.
 
@@ -726,14 +1026,16 @@
   }
 
   function edgeMarkup(e, st) {
-    const points = st.routes.get(e.key).points, d = rounded(points), label = labelPoint(st, e);
-    const lag = e.kind === 'lag', color = e.critical ? '#bd623f' : lag ? '#9a6b1f' : '#7194b9';
+    const points = st.routes.get(e.key).points, d = rounded(points);
+    // A release link (BĐ → task held by levelling / a start constraint) is a dashed "wait" link
+    // like an AOA lag arrow, never a solid critical dependency.
+    const lag = e.kind === 'lag' || e.release === true, color = e.critical ? '#bd623f' : lag ? '#9a6b1f' : '#7194b9';
     const marker = e.critical ? '-red' : lag ? '-lag' : '';
+    const dash = e.dummy ? ' stroke-dasharray="6 4"' : e.release ? ' stroke-dasharray="5 4"' : '';
     return (
-      `<g class="graph-edge${e.dummy ? ' graph-dummy' : ''}${lag ? ' graph-lag' : ''}" data-edge-key="${esc(e.key)}">` +
+      `<g class="graph-edge${e.dummy ? ' graph-dummy' : ''}${lag ? ' graph-lag' : ''}${e.release ? ' graph-release' : ''}" data-edge-key="${esc(e.key)}">` +
       `<path d="${d}" fill="none" stroke="#fff" stroke-width="5" stroke-linejoin="round"/>` +
-      `<path d="${d}" fill="none" stroke="${color}" stroke-width="${e.critical ? 2.7 : 1.6}" stroke-linejoin="round"${e.dummy ? ' stroke-dasharray="6 4"' : ''} marker-end="url(#graph-arrow${marker})"/>` +
-      (e.label ? `<text x="${fixed(label.x)}" y="${fixed(label.y)}" text-anchor="middle" font-size="12" fill="${lag ? '#7a5418' : '#385e88'}" stroke="#fff" stroke-width="4" paint-order="stroke">${esc(e.label)}</text>` : '') +
+      `<path d="${d}" fill="none" stroke="${color}" stroke-width="${e.critical ? 2.7 : 1.6}" stroke-linejoin="round"${dash} marker-end="url(#graph-arrow${marker})"/>` +
       `</g>`
     );
   }
@@ -749,46 +1051,54 @@
         `<text x="-14" y="18" text-anchor="middle" font-size="11" fill="#315c88">${number(n.early)}</text>` +
         `<text x="14" y="18" text-anchor="middle" font-size="11" fill="#315c88">${number(n.late)}</text>`;
     } else if (style === 'card') {
-      const h = st.half, chars = Math.max(10, Math.floor((2 * h - 16) / 5.6)), name = n.name || '';
+      const h = st.half, text = cardText(n, h), two = text.name.length > 1;
       content =
         `<rect x="${-h}" y="-50" width="${2 * h}" height="110" rx="8" fill="${fill}" stroke="${color}"/>` +
         `<text x="${10 - h}" y="-32" font-size="11" fill="#3e648e">ES ${number(n.es)}</text><text x="${h - 10}" y="-32" text-anchor="end" font-size="11" fill="#3e648e">EF ${number(n.ef)}</text>` +
-        `<text y="-11" text-anchor="middle" font-size="15" font-weight="600" fill="#173f73">${esc(n.label)} · ${number(n.duration)}n</text>` +
-        `<text y="6" text-anchor="middle" font-size="10" fill="#3e648e">${esc(name.length > chars ? name.slice(0, chars - 1) + '…' : name)}</text>` +
+        `<text y="-11" text-anchor="middle" font-size="15" font-weight="600" fill="#173f73">${esc(text.head)}</text>` +
+        (text.name.length ? `<text y="${two ? 3 : 6}" text-anchor="middle" font-size="10" fill="#3e648e">${text.name.map((line, i) => `<tspan x="0"${i ? ' dy="12"' : ''}>${esc(line)}</tspan>`).join('')}</text>` : '') +
         `<text x="${10 - h}" y="27" font-size="11" fill="#3e648e">LS ${number(n.ls)}</text><text x="${h - 10}" y="27" text-anchor="end" font-size="11" fill="#3e648e">LF ${number(n.lf)}</text>` +
         `<text x="${10 - h}" y="46" font-size="10" fill="#3e648e">TF ${number(n.tf)}</text><text x="${h - 10}" y="46" text-anchor="end" font-size="10" fill="#3e648e">FF ${number(n.ff)}</text>`;
     } else if (n.virtual) {
       content =
         `<circle r="30" fill="${fill}" stroke="${color}" stroke-width="2"/><text y="6" text-anchor="middle" font-size="16" font-weight="600" fill="#173e72">${esc(n.label)}</text>` +
-        `<text y="50" text-anchor="middle" font-size="11" fill="#345f8c">${n.key === '@finish' ? 'T = ' + number(n.es) : number(n.es)}</text>`;
+        `<text y="50" text-anchor="middle" font-size="11" fill="#345f8c">T = ${number(n.es)}</text>`;
     } else {
-      const name = n.name || '';
+      const text = circleText(n);
       content =
         `<circle r="30" fill="${fill}" stroke="${color}" stroke-width="2"/><text y="6" text-anchor="middle" font-size="17" font-weight="600" fill="#173e72">${esc(n.label)}</text>` +
-        [['ES', n.es, -48, -15], ['EF', n.ef, 48, -15], ['LS', n.ls, -48, 25], ['LF', n.lf, 48, 25]]
-          .map(([label, value, x, y]) => `<text x="${x}" y="${y}" text-anchor="middle" font-size="10" fill="#345f8c">${label} ${number(value)}</text>`)
-          .join('') +
-        `<text y="50" text-anchor="middle" font-size="11" fill="#345f8c">TF ${number(n.tf)} · FF ${number(n.ff)}</text>` +
-        `<text y="66" text-anchor="middle" font-size="11" font-weight="600" fill="#315b87">D ${number(n.duration)}${n.crew === false ? '' : ' · NC ' + number(n.workers || 0)}</text>` +
-        (name ? `<text y="81" text-anchor="middle" font-size="10" fill="#557493">${esc(name.length > 24 ? name.slice(0, 23) + '…' : name)}</text>` : '');
+        text.corners.map(([value, x, y]) => `<text x="${x}" y="${y}" text-anchor="middle" font-size="10" fill="#345f8c">${value}</text>`).join('') +
+        `<text y="50" text-anchor="middle" font-size="11" fill="#345f8c">${text.float}</text>` +
+        `<text y="66" text-anchor="middle" font-size="11" font-weight="600" fill="#315b87">${text.duration}</text>` +
+        (text.name.length ? `<text y="81" text-anchor="middle" font-size="10" fill="#557493">${text.name.map((line, i) => `<tspan x="0"${i ? ' dy="12"' : ''}>${esc(line)}</tspan>`).join('')}</text>` : '');
     }
+    // Full task name on hover (the drawn name may be wrapped or, beyond two lines, shortened).
+    const name = graph.kind === 'aoa' || n.virtual ? '' : shownName(n);
+    const title = n.virtual || graph.kind === 'aoa' ? 'Sự kiện ' + n.label : name ? n.label + ' · ' + name : n.label;
     const aria = n.virtual ? 'Sự kiện ' + n.label : n.name || 'Sự kiện ' + n.label;
-    return `<g class="graph-node" data-node-key="${esc(n.key)}" tabindex="0" role="button" aria-label="${esc(aria)}" transform="translate(${pos.x} ${pos.y})">${content}</g>`;
+    return `<g class="graph-node" data-node-key="${esc(n.key)}" tabindex="0" role="button" aria-label="${esc(aria)}" transform="translate(${pos.x} ${pos.y})"><title>${esc(title)}</title>${content}</g>`;
   }
 
+  // Fixed-size arrowheads (user space, not scaled by the stroke width): see HEAD and PORT_GAP.
   const DEFS =
     '<defs>' +
-    '<marker id="graph-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0 0L7 3L0 6z" fill="#7194b9"/></marker>' +
-    '<marker id="graph-arrow-red" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0 0L7 3L0 6z" fill="#bd623f"/></marker>' +
-    '<marker id="graph-arrow-lag" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0 0L7 3L0 6z" fill="#9a6b1f"/></marker>' +
+    '<marker id="graph-arrow" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0L9 4L0 8z" fill="#7194b9"/></marker>' +
+    '<marker id="graph-arrow-red" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="9" refX="10" refY="4.5" orient="auto"><path d="M0 0L10 4.5L0 9z" fill="#bd623f"/></marker>' +
+    '<marker id="graph-arrow-lag" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0L9 4L0 8z" fill="#9a6b1f"/></marker>' +
     '</defs>';
 
+  // Nhãn quan hệ (FS+1, SS+5…) vẽ thành một lớp riêng trên mọi đường nối để không đường nào che mất chữ.
+  function edgeLabelMarkup(e, st) {
+    if (!e.label) return '';
+    const label = labelPoint(st, e), lag = e.kind === 'lag' || e.release === true;
+    return `<text class="graph-edge-label" data-edge-label="${esc(e.key)}" x="${fixed(label.x)}" y="${fixed(label.y)}" text-anchor="middle" font-size="12" fill="${lag ? '#7a5418' : '#385e88'}" stroke="#fff" stroke-width="4" paint-order="stroke">${esc(e.label)}</text>`;
+  }
   function contents(graph, p, style = 'circle') {
     lastStyle = style;
     const st = plan(graph, p, style);
     // Critical links are drawn last so they stay on top.
     const edges = [...graph.edges.filter((e) => !e.critical), ...graph.edges.filter((e) => e.critical)];
-    return DEFS + edges.map((e) => edgeMarkup(e, st)).join('') + graph.nodes.map((n) => nodeMarkup(n, graph, style, st)).join('');
+    return DEFS + edges.map((e) => edgeMarkup(e, st)).join('') + `<g class="graph-edge-labels">${edges.map((e) => edgeLabelMarkup(e, st)).join('')}</g>` + graph.nodes.map((n) => nodeMarkup(n, graph, style, st)).join('');
   }
 
   function svg(graph, p, style = 'circle', interactive = false) {
@@ -843,5 +1153,5 @@
     return out + '</svg>';
   }
 
-  return { build, positions, bounds, contents, svg, validateLayouts, routes, cyclogram };
+  return { build, positions, bounds, fitWidth, contents, svg, validateLayouts, routes, cyclogram };
 });
